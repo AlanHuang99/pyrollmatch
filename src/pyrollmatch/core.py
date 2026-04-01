@@ -70,7 +70,7 @@ def rollmatch(
     lookback: int = 1,
     alpha: float = 0,
     num_matches: int = 3,
-    replacement: bool = True,
+    replacement: str | bool = True,
     standard_deviation: str = "average",
     model_type: str = "logistic",
     match_on: str = "logit",
@@ -100,8 +100,16 @@ def rollmatch(
         Caliper multiplier (0 = no caliper).
     num_matches : int
         Number of control matches per treated unit.
-    replacement : bool
-        Allow control reuse within time period.
+    replacement : str or bool
+        Control reuse policy:
+
+        - ``"unrestricted"`` or ``True``: controls reused freely
+          (within and across periods).
+        - ``"cross_cohort"`` or ``False``: no reuse within a period,
+          allowed across periods. This is consistent with R rollmatch.
+        - ``"global_no"``: a control matched at most once across all
+          periods. Note: results depend on the order periods are
+          processed (earliest first).
     standard_deviation : str
         Method for pooled SD in caliper.
     model_type : str
@@ -203,7 +211,7 @@ def alpha_sweep(
     alphas: list[float] | None = None,
     lookback: int = 1,
     num_matches: int = 3,
-    replacement: bool = True,
+    replacement: str | bool = True,
     standard_deviation: str = "average",
     model_type: str = "logistic",
     match_on: str = "logit",

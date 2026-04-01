@@ -48,6 +48,7 @@ result = rollmatch(
     lookback=1,                 # periods to look back for baseline
     alpha=0.1,                  # caliper = alpha × pooled_SD
     num_matches=3,              # controls per treated
+    replacement="cross_cohort", # control reuse policy (see below)
     model_type="logistic",      # propensity score model
 )
 
@@ -70,6 +71,55 @@ summary, best = alpha_sweep(
 # summary: alpha, match_rate, max|SMD|, all_pass
 # best: RollmatchResult from the best alpha
 ```
+
+### Control Replacement Modes
+
+The `replacement` parameter controls whether a control unit can be reused across matching:
+
+| Mode | `replacement=` | Within-period reuse | Cross-period reuse | Best for |
+|---|---|---|---|---|
+| **Unrestricted** | `"unrestricted"` or `True` | Yes | Yes | Maximizing match rate |
+| **Cross-cohort** | `"cross_cohort"` or `False` | No | Yes | R rollmatch compatibility |
+| **Global no** | `"global_no"` | No | No | Unique control assignments |
+
+```python
+# Each control matched at most once across ALL periods
+result = rollmatch(data, ..., replacement="global_no")
+
+# No reuse within a period, but allowed across periods (R rollmatch default)
+result = rollmatch(data, ..., replacement="cross_cohort")
+
+# Controls can match multiple treated units freely
+result = rollmatch(data, ..., replacement="unrestricted")
+```
+
+> **Note on `"global_no"`**: Because controls are consumed as periods are processed (earliest first), the order of periods affects results. This mode also changes the estimand — later cohorts may get worse matches as the control pool shrinks. Use `balance_by_period()` to check whether later cohorts suffer.
+
+> **Backward compatibility**: `replacement=True` maps to `"unrestricted"` and `replacement=False` maps to `"cross_cohort"`, matching the original behavior.
+
+### Per-Period Balance Diagnostics
+
+Pooled SMD can mask within-cohort imbalance through cancellation. Use `balance_by_period()` to check each entry cohort individually:
+
+```python
+from pyrollmatch import balance_by_period, reduce_data, score_data
+
+reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
+scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+
+agg, detail = balance_by_period(
+    scored, result.matched_data,
+    "treat", "unit_id", "time", ["x1", "x2", "x3"],
+)
+
+# agg: covariate × {wtd_mean_smd, median_abs_smd, max_abs_smd, n_periods}
+# detail: period × covariate × {n_treated, n_controls, smd}
+```
+
+The aggregate table reports three summary measures per covariate:
+- **`wtd_mean_smd`** — weighted mean SMD (weighted by n_treated per period)
+- **`median_abs_smd`** — robust central tendency
+- **`max_abs_smd`** — most conservative, catches the worst cohort
 
 ### Post-Matching Diagnostics
 
@@ -178,7 +228,8 @@ unit_id | time | treat | entry_time | x1   | x2
 |---|---|
 | `balance_test()` | SMD + t-test + variance ratio + KS test |
 | `equivalence_test()` | TOST equivalence test (Hartman & Hidalgo 2018) |
-| `compute_balance()` | Covariate balance table |
+| `compute_balance()` | Covariate balance table (pooled across all periods) |
+| `balance_by_period()` | Per-period SMD with aggregate summary |
 | `smd_table()` | Print formatted SMD table |
 
 ### RollmatchResult

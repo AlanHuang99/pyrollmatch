@@ -32,7 +32,7 @@ References
 from .core import rollmatch, alpha_sweep, RollmatchResult
 from .reduce import reduce_data
 from .score import score_data, ScoredResult
-from .balance import compute_balance, smd_table
+from .balance import compute_balance, balance_by_period, smd_table
 from .diagnostics import balance_test, equivalence_test
 
 __version__ = "0.0.4"
@@ -44,6 +44,7 @@ __all__ = [
     "score_data",
     "ScoredResult",
     "compute_balance",
+    "balance_by_period",
     "smd_table",
     "balance_test",
     "equivalence_test",

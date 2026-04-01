@@ -105,7 +105,7 @@ class TestParameterSensitivity:
         assert match_counts["len"].max() <= 5
 
     def test_replacement_false(self):
-        """Without replacement, controls used at most once PER TIME PERIOD."""
+        """replacement=False (cross_cohort): controls used at most once per period."""
         data = make_synthetic_data(n_controls=500, seed=42)
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
