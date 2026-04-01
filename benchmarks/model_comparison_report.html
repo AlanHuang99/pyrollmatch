@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><head><title>pyrollmatch Model Comparison</title>
+<style>
+body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+h1 { border-bottom: 2px solid #2563eb; padding-bottom: 10px; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+th, td { border: 1px solid #d1d5db; padding: 8px 12px; text-align: right; }
+th { background: #f3f4f6; }
+td:first-child { text-align: left; font-weight: 600; }
+.pass { color: #059669; font-weight: 600; }
+.fail { color: #dc2626; font-weight: 600; }
+</style></head><body>
+<h1>pyrollmatch Model Comparison</h1>
+<p>All 8 scoring methods on synthetic data (500 treated, 2000 controls, 5 covariates, α=0.1)</p>
+<table>
+<tr><th>Model</th><th>Runtime</th><th>Matched</th><th>Pairs</th><th>Max|SMD|</th><th>Pass</th></tr>
+<tr>
+            <td>logistic</td><td>0.028s</td>
+            <td>500</td><td>1498</td>
+            <td class="pass">0.0422</td>
+            <td class="pass">✓</td></tr><tr>
+            <td>probit</td><td>0.026s</td>
+            <td>500</td><td>1498</td>
+            <td class="pass">0.0422</td>
+            <td class="pass">✓</td></tr><tr>
+            <td>gbm</td><td>0.111s</td>
+            <td>492</td><td>1446</td>
+            <td class="fail">0.1478</td>
+            <td class="fail">✗</td></tr><tr>
+            <td>rf</td><td>0.152s</td>
+            <td>457</td><td>1341</td>
+            <td class="fail">0.4119</td>
+            <td class="fail">✗</td></tr><tr>
+            <td>lasso</td><td>0.034s</td>
+            <td>500</td><td>1498</td>
+            <td class="pass">0.0544</td>
+            <td class="pass">✓</td></tr><tr>
+            <td>ridge</td><td>0.024s</td>
+            <td>500</td><td>1498</td>
+            <td class="pass">0.0422</td>
+            <td class="pass">✓</td></tr><tr>
+            <td>elasticnet</td><td>0.047s</td>
+            <td>500</td><td>1498</td>
+            <td class="pass">0.0446</td>
+            <td class="pass">✓</td></tr><tr>
+            <td>mahalanobis</td><td>0.024s</td>
+            <td>500</td><td>1495</td>
+            <td class="pass">0.0912</td>
+            <td class="pass">✓</td></tr>
+</table>
+<p><strong>6/8 models pass</strong> the |SMD| &lt; 0.1 threshold.</p>
+</body></html>

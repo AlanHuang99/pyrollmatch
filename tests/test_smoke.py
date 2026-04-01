@@ -1,0 +1,255 @@
+"""Smoke tests — basic functionality verification."""
+
+import polars as pl
+import numpy as np
+import pytest
+from pyrollmatch import reduce_data, score_data, rollmatch, alpha_sweep
+from pyrollmatch.balance import compute_balance
+from pyrollmatch.diagnostics import balance_test, equivalence_test
+
+
+def make_synthetic_data(
+    n_treated: int = 100,
+    n_controls: int = 300,
+    n_periods: int = 10,
+    entry_range: tuple = (6, 9),
+    seed: int = 42,
+) -> pl.DataFrame:
+    """Create synthetic panel data for testing."""
+    rng = np.random.default_rng(seed)
+
+    rows = []
+    # Treated units
+    for i in range(n_treated):
+        entry_t = rng.integers(entry_range[0], entry_range[1] + 1)
+        for t in range(1, n_periods + 1):
+            # Pre-treatment: baseline activity
+            # Post-treatment: increased activity
+            base = rng.exponential(2.0)
+            boost = 1.5 if t >= entry_t else 1.0
+            rows.append({
+                "unit_id": i,
+                "time": t,
+                "treat": 1,
+                "entry_time": int(entry_t),
+                "x1": float(base * boost + rng.normal(0, 0.5)),
+                "x2": float(rng.exponential(1.0) * boost + rng.normal(0, 0.3)),
+                "x3": float(rng.poisson(3) * boost),
+            })
+
+    # Control units
+    for i in range(n_controls):
+        for t in range(1, n_periods + 1):
+            base = rng.exponential(2.0)
+            rows.append({
+                "unit_id": n_treated + i,
+                "time": t,
+                "treat": 0,
+                "entry_time": 99,
+                "x1": float(base + rng.normal(0, 0.5)),
+                "x2": float(rng.exponential(1.0) + rng.normal(0, 0.3)),
+                "x3": float(rng.poisson(3)),
+            })
+
+    return pl.DataFrame(rows)
+
+
+@pytest.fixture
+def synth_data():
+    return make_synthetic_data()
+
+
+class TestReduceData:
+    def test_basic(self, synth_data):
+        result = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id", lookback=1)
+        assert result.height > 0
+        # Should have both treated and control rows
+        assert result.filter(pl.col("treat") == 1).height > 0
+        assert result.filter(pl.col("treat") == 0).height > 0
+
+    def test_treated_at_baseline(self, synth_data):
+        result = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id", lookback=1)
+        # Treated units should be at entry_time - 1
+        treated = result.filter(pl.col("treat") == 1)
+        assert (treated["time"] == treated["entry_time"] - 1).all()
+
+    def test_invalid_lookback(self, synth_data):
+        with pytest.raises(ValueError):
+            reduce_data(synth_data, "treat", "time", "entry_time", "unit_id", lookback=0)
+
+    def test_missing_column(self, synth_data):
+        with pytest.raises(ValueError):
+            reduce_data(synth_data, "treat", "time", "nonexistent", "unit_id")
+
+
+class TestScoreData:
+    def test_adds_score_column(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        assert "score" in scored.columns
+        assert scored["score"].null_count() == 0
+
+    def test_logit_scores_unbounded(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="logit")
+        # Logit scores can be negative or positive
+        assert scored["score"].min() < 0 or scored["score"].max() > 0
+
+    def test_pscore_bounded(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="pscore")
+        assert scored["score"].min() >= 0
+        assert scored["score"].max() <= 1
+
+    def test_probit_model(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
+                           model_type="probit", match_on="logit")
+        assert "score" in scored.columns
+        assert scored["score"].null_count() == 0
+        # Probit scores (Φ⁻¹(p)) are unbounded but typically in [-3, 3]
+        assert scored["score"].min() > -10
+        assert scored["score"].max() < 10
+
+    def test_return_model(self, synth_data):
+        from pyrollmatch.score import ScoredResult
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        result = score_data(reduced, ["x1", "x2", "x3"], "treat", return_model=True)
+        assert isinstance(result, ScoredResult)
+        assert "score" in result.data.columns
+        assert result.model is not None
+        assert result.model_type == "logistic"
+        assert len(result.covariates) == 3
+
+    @pytest.mark.parametrize("model_type", ["gbm", "rf", "lasso", "ridge", "elasticnet"])
+    def test_ml_model_types(self, synth_data, model_type):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
+                           model_type=model_type, match_on="logit")
+        assert "score" in scored.columns
+        assert scored["score"].null_count() == 0
+        assert scored.height == reduced.height
+
+    def test_mahalanobis_scores(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
+                           model_type="mahalanobis")
+        assert "score" in scored.columns
+        assert scored["score"].null_count() == 0
+        # Mahalanobis distances are non-negative
+        assert scored["score"].min() >= 0
+
+    def test_mahalanobis_return_model_none(self, synth_data):
+        from pyrollmatch.score import ScoredResult
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        result = score_data(reduced, ["x1", "x2", "x3"], "treat",
+                           model_type="mahalanobis", return_model=True)
+        assert isinstance(result, ScoredResult)
+        assert result.model is None  # No fitted model for mahalanobis
+
+    def test_invalid_model_type(self, synth_data):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        with pytest.raises(ValueError, match="model_type must be one of"):
+            score_data(reduced, ["x1", "x2", "x3"], "treat", model_type="xgboost")
+
+
+class TestRollmatch:
+    def test_basic_matching(self, synth_data):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, num_matches=3, verbose=False,
+        )
+        assert result is not None
+        assert result.matched_data.height > 0
+        assert result.n_treated_matched > 0
+        assert result.weights.height > 0
+
+    def test_weights_structure(self, synth_data):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, num_matches=3, verbose=False,
+        )
+        # Treated should have weight=1
+        treated_ids = result.matched_data["treat_id"].unique()
+        treat_weights = result.weights.filter(pl.col("unit_id").is_in(treated_ids))
+        assert (treat_weights["weight"] == 1.0).all()
+
+    def test_balance_computed(self, synth_data):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, verbose=False,
+        )
+        assert result.balance.height == 3  # 3 covariates
+        assert "matched_smd" in result.balance.columns
+
+
+class TestRollmatchModelTypes:
+    """End-to-end rollmatch with each scoring model."""
+
+    @pytest.mark.parametrize("model_type", [
+        "logistic", "probit", "gbm", "rf", "lasso", "ridge", "elasticnet", "mahalanobis",
+    ])
+    def test_rollmatch_all_models(self, synth_data, model_type):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, num_matches=3, model_type=model_type, verbose=False,
+        )
+        assert result is not None, f"rollmatch returned None for model_type={model_type}"
+        assert result.matched_data.height > 0
+        assert result.balance.height == 3
+        max_smd = result.balance["matched_smd"].abs().max()
+        # All models should achieve reasonable balance on synthetic data
+        assert max_smd < 0.5, f"model_type={model_type} has max|SMD|={max_smd:.4f}"
+
+
+class TestAlphaSweep:
+    def test_sweep(self, synth_data):
+        summary, best = alpha_sweep(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alphas=[0.1, 0.2],
+            num_matches=3,
+        )
+        assert summary.height > 0
+        assert best is not None
+        assert "alpha" in summary.columns
+
+
+class TestDiagnostics:
+    def test_balance_test(self, synth_data):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, verbose=False,
+        )
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+
+        diag = balance_test(
+            scored, result.matched_data, "treat", "unit_id", "time", ["x1", "x2", "x3"]
+        )
+        assert diag.height == 3
+        assert "smd" in diag.columns
+        assert "t_pvalue" in diag.columns
+
+    def test_equivalence_test(self, synth_data):
+        result = rollmatch(
+            synth_data, "treat", "time", "entry_time", "unit_id",
+            covariates=["x1", "x2", "x3"],
+            alpha=0.2, verbose=False,
+        )
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+
+        equiv = equivalence_test(
+            scored, result.matched_data, "treat", "unit_id", "time", ["x1", "x2", "x3"]
+        )
+        assert equiv.height == 3
+        assert "tost_p" in equiv.columns
+        assert "equivalent" in equiv.columns
