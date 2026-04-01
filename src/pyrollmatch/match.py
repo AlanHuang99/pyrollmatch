@@ -63,6 +63,32 @@ def compute_caliper_width(
     return alpha * pooled_sd
 
 
+def _normalize_replacement(replacement: str | bool) -> str:
+    """Normalize replacement parameter to one of three string modes.
+
+    Parameters
+    ----------
+    replacement : str or bool
+        - ``"unrestricted"`` or ``True``: controls reused freely.
+        - ``"cross_cohort"`` or ``False``: no reuse within a period,
+          allowed across periods.
+        - ``"global_no"``: a control matched at most once across all periods.
+
+    Returns
+    -------
+    str
+        One of ``"unrestricted"``, ``"cross_cohort"``, ``"global_no"``.
+    """
+    if isinstance(replacement, bool):
+        return "unrestricted" if replacement else "cross_cohort"
+    valid = {"unrestricted", "cross_cohort", "global_no"}
+    if replacement not in valid:
+        raise ValueError(
+            f"replacement must be one of {valid} or a bool, got {replacement!r}"
+        )
+    return replacement
+
+
 def match_within_period(
     treated_scores: np.ndarray,
     control_scores: np.ndarray,
@@ -70,8 +96,9 @@ def match_within_period(
     control_ids: np.ndarray,
     caliper_width: float,
     num_matches: int = 3,
-    replacement: bool = True,
+    replacement: str | bool = True,
     block_size: int = 2000,
+    _used_controls: set | None = None,
 ) -> MatchResult | None:
     """Match treated to controls within a single time period.
 
@@ -88,15 +115,22 @@ def match_within_period(
         Maximum allowed score difference.
     num_matches : int
         Number of control matches per treated unit.
-    replacement : bool
-        If True, controls can match multiple treated within same period.
+    replacement : str or bool
+        ``"unrestricted"`` / ``True``: controls reused freely.
+        ``"cross_cohort"`` / ``False``: no reuse within a period.
+        ``"global_no"``: no reuse across any period.
     block_size : int
         Number of treated units to process at once.
+    _used_controls : set or None
+        Externally managed set of already-used control IDs.
+        Used by ``match_all_periods`` for ``"global_no"`` mode.
 
     Returns
     -------
     MatchResult or None if no matches found.
     """
+    mode = _normalize_replacement(replacement)
+
     n_treated = len(treated_scores)
     n_controls = len(control_scores)
 
@@ -107,8 +141,14 @@ def match_within_period(
     all_control_ids = []
     all_diffs = []
 
-    # Track which controls are used (for replacement=False)
-    used_controls = set() if not replacement else None
+    # Track which controls are used within this period
+    if mode == "unrestricted":
+        used_controls = None
+    elif mode == "cross_cohort":
+        used_controls = set()
+    else:  # global_no
+        # Use the externally managed set so exclusions persist across periods
+        used_controls = _used_controls if _used_controls is not None else set()
 
     # Process treated units in blocks for memory efficiency
     for block_start in range(0, n_treated, block_size):
@@ -117,7 +157,7 @@ def match_within_period(
         block_ids = treated_ids[block_start:block_end]
 
         # Available controls
-        if not replacement and used_controls:
+        if used_controls is not None and used_controls:
             available_mask = np.array([
                 cid not in used_controls for cid in control_ids
             ])
@@ -156,14 +196,14 @@ def match_within_period(
                 ctrl_idx = sorted_idx[j]
                 ctrl_id = avail_ids[ctrl_idx]
 
-                if not replacement and ctrl_id in used_controls:
+                if used_controls is not None and ctrl_id in used_controls:
                     continue
 
                 all_treat_ids.append(block_ids[i])
                 all_control_ids.append(ctrl_id)
                 all_diffs.append(dists[ctrl_idx])
 
-                if not replacement:
+                if used_controls is not None:
                     used_controls.add(ctrl_id)
 
     if not all_treat_ids:
@@ -185,7 +225,7 @@ def match_all_periods(
     id: str,
     alpha: float,
     num_matches: int = 3,
-    replacement: bool = True,
+    replacement: str | bool = True,
     standard_deviation: str = "average",
     block_size: int = 2000,
 ) -> pl.DataFrame | None:
@@ -201,8 +241,11 @@ def match_all_periods(
         Caliper multiplier.
     num_matches : int
         Controls per treated.
-    replacement : bool
-        Allow control reuse within period.
+    replacement : str or bool
+        ``"unrestricted"`` / ``True``: controls reused freely.
+        ``"cross_cohort"`` / ``False``: no reuse within a period,
+        allowed across periods.
+        ``"global_no"``: a control matched at most once across all periods.
     standard_deviation : str
         Method for pooled SD.
     block_size : int
@@ -212,6 +255,8 @@ def match_all_periods(
     -------
     pl.DataFrame with columns: tm, treat_id, control_id, difference
     """
+    mode = _normalize_replacement(replacement)
+
     # Compute global caliper width
     all_treated = scored_data.filter(pl.col(treat) == 1)["score"].to_numpy()
     all_controls = scored_data.filter(pl.col(treat) == 0)["score"].to_numpy()
@@ -225,6 +270,9 @@ def match_all_periods(
     )
 
     all_matches = []
+
+    # For global_no mode, maintain a shared set across periods
+    global_used = set() if mode == "global_no" else None
 
     for t in time_periods:
         # Get treated and control data at this time period
@@ -241,8 +289,9 @@ def match_all_periods(
             control_ids=c_data[id].to_numpy(),
             caliper_width=caliper_width,
             num_matches=num_matches,
-            replacement=replacement,
+            replacement=mode,
             block_size=block_size,
+            _used_controls=global_used,
         )
 
         if result is not None:

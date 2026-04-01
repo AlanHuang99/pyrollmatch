@@ -7,7 +7,7 @@ Tests:
   2. Different alpha values (0.001, 0.01, 0.05, 0.1, 0.2)
   3. Different num_matches (1, 3, 5)
   4. Different covariate counts (3, 5, 10)
-  5. Replacement vs no replacement
+  5. Replacement modes (cross_cohort vs R replacement=FALSE)
 
 For each config, compares:
   - Score correlation
@@ -296,13 +296,13 @@ def main():
         })
         print(f"corr={comp.get('score_corr', 0):.4f} overlap={comp.get('pair_overlap', 0):.1f}%")
 
-    # ── Test 5: Replacement=False ──
-    print("\n── Test 5: replacement=False (n=500, alpha=0.1, matches=1) ──")
-    py = run_py(data, covs, 0.1, 1, replacement=False)
+    # ── Test 5: Replacement=cross_cohort (maps to R replacement=FALSE) ──
+    print("\n── Test 5: replacement='cross_cohort' (n=500, alpha=0.1, matches=1) ──")
+    py = run_py(data, covs, 0.1, 1, replacement="cross_cohort")
     r = run_r(data, covs, 0.1, 1, replacement=False)
     comp = compare(py, r)
     results.append({
-        "test": "no_replacement", "config": "repl=False",
+        "test": "cross_cohort", "config": "repl=cross_cohort",
         "py_time": py["elapsed"], "r_time": r.get("elapsed"),
         "py_matched": py["n_matched"], "r_matched": r.get("n_matched", 0),
         "py_max_smd": py["max_smd"], "r_max_smd": r.get("max_smd"),
