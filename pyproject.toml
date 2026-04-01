@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyrollmatch"
-version = "0.0.5"
+version = "0.0.6"
 description = "Fast rolling entry matching for staggered adoption studies using polars + numpy"
 readme = "README.md"
 license = "MIT"

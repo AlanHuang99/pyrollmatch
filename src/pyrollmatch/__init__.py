@@ -35,7 +35,7 @@ from .score import score_data, ScoredResult
 from .balance import compute_balance, balance_by_period, smd_table
 from .diagnostics import balance_test, equivalence_test
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 __all__ = [
     "rollmatch",
     "alpha_sweep",
