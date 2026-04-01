@@ -4,7 +4,7 @@ import polars as pl
 import numpy as np
 import pytest
 import time
-from pyrollmatch import rollmatch, alpha_sweep
+from pyrollmatch import rollmatch
 from tests.test_smoke import make_synthetic_data
 
 

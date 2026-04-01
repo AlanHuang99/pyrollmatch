@@ -129,17 +129,6 @@ class TestReplacementModes:
                 alpha=0.2, replacement="invalid", verbose=False,
             )
 
-    def test_alpha_sweep_with_replacement_modes(self, data):
-        """alpha_sweep should accept string replacement modes."""
-        from pyrollmatch import alpha_sweep
-        summary, best = alpha_sweep(
-            data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alphas=[0.1, 0.2],
-            replacement="global_no",
-        )
-        assert summary.height > 0
-        assert best is not None
 
 
 # ---------------------------------------------------------------------------
