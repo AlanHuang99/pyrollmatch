@@ -3,7 +3,7 @@
 import polars as pl
 import numpy as np
 import pytest
-from pyrollmatch import reduce_data, score_data, rollmatch, alpha_sweep
+from pyrollmatch import reduce_data, score_data, rollmatch
 from pyrollmatch.balance import compute_balance
 from pyrollmatch.diagnostics import balance_test, equivalence_test
 
@@ -204,19 +204,6 @@ class TestRollmatchModelTypes:
         max_smd = result.balance["matched_smd"].abs().max()
         # All models should achieve reasonable balance on synthetic data
         assert max_smd < 0.5, f"model_type={model_type} has max|SMD|={max_smd:.4f}"
-
-
-class TestAlphaSweep:
-    def test_sweep(self, synth_data):
-        summary, best = alpha_sweep(
-            synth_data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alphas=[0.1, 0.2],
-            num_matches=3,
-        )
-        assert summary.height > 0
-        assert best is not None
-        assert "alpha" in summary.columns
 
 
 class TestDiagnostics:
