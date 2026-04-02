@@ -22,14 +22,42 @@ from .balance import compute_balance, compute_balance_weighted, smd_table
 
 @dataclass
 class RollmatchResult:
-    """Result from rollmatch."""
-    matched_data: pl.DataFrame | None  # None for weighting-only methods
+    """Result from rollmatch.
+
+    Attributes
+    ----------
+    matched_data : pl.DataFrame or None
+        Match pairs [tm, treat_id, control_id, difference].
+        None for weighting-only methods.
+    balance : pl.DataFrame
+        Covariate balance table (pooled or per-period depending on method).
+    n_treated_total : int
+        Total treated units in the reduced sample.
+    n_treated_matched : int
+        Treated units successfully matched/weighted.
+    n_controls_matched : int
+        Unique control units used.
+    alpha : float or None
+        Caliper multiplier. None for non-caliper methods.
+    weights : pl.DataFrame
+        Unit weights [id, weight]. For matching, derived from pairs.
+        For ebal, collapsed across cohorts (convenience — use
+        ``weighted_data`` for per-cohort weights).
+    weighted_data : pl.DataFrame or None
+        Stacked per-cohort weights [tm, id, weight]. Each cohort has
+        its own weight vector; controls appear once per cohort they
+        participate in. None for matching.
+    method : str
+        Method used: "matching", "ebal", "custom".
+    """
+    matched_data: pl.DataFrame | None
     balance: pl.DataFrame
     n_treated_total: int
     n_treated_matched: int
     n_controls_matched: int
-    alpha: float | None                # None for non-caliper methods
-    weights: pl.DataFrame              # always [id, weight]
+    alpha: float | None
+    weights: pl.DataFrame
+    weighted_data: pl.DataFrame | None = None
     method: str = "matching"
 
 
@@ -63,10 +91,6 @@ _EBAL_DEFAULTS = {
     "max_weight": None,
 }
 
-# Weighting methods currently require global_no replacement semantics
-# (each control assigned to at most one cohort). Supporting cross_cohort
-# or unrestricted would require resolving weight aggregation across
-# cohorts (stacked vs collapsed structure). See issue #5 discussion.
 
 
 def _validate_kwargs(method: str, kwargs: dict, valid: set, defaults: dict) -> dict:
@@ -177,7 +201,16 @@ def _run_ebal(
     verbose: bool,
     **kwargs,
 ) -> RollmatchResult | None:
-    """Run entropy balancing pipeline: reduce → per-period ebal → balance."""
+    """Run entropy balancing pipeline: reduce → per-period ebal → balance.
+
+    Each entry cohort runs ebal independently on the FULL control pool.
+    Controls are reused across cohorts (stacked design) — the same
+    control gets different weights per cohort. This is standard in
+    staggered DiD (Cengiz et al. 2019; Baker et al. 2022).
+
+    Returns stacked per-cohort weights in ``weighted_data`` and a
+    collapsed convenience weight in ``weights``.
+    """
     opts = _validate_kwargs("ebal", kwargs, _EBAL_KWARGS, _EBAL_DEFAULTS)
 
     if verbose:
@@ -199,7 +232,7 @@ def _run_ebal(
             print("  ERROR: No valid rows")
         return None
 
-    # Step 2: Per-period entropy balancing with global_no exclusion
+    # Step 2: Per-period entropy balancing on full control pool
     if verbose:
         print(f"  Step 2: entropy balancing (moment={opts['moment']})...")
 
@@ -207,9 +240,9 @@ def _run_ebal(
         reduced.filter(pl.col(treat) == 1)[tm].unique().sort().to_list()
     )
 
-    all_weights = []
-    used_controls: set = set()
+    stacked_weights = []  # (tm, id, weight) per cohort
     n_treated_total = reduced.filter(pl.col(treat) == 1)[id].n_unique()
+    n_periods_ok = 0
 
     for t in time_periods:
         t_data = reduced.filter((pl.col(treat) == 1) & (pl.col(tm) == t))
@@ -218,38 +251,33 @@ def _run_ebal(
         if t_data.height == 0 or c_data.height == 0:
             continue
 
-        # Global no-replacement: exclude already-used controls
-        if used_controls:
-            c_data = c_data.filter(~pl.col(id).is_in(list(used_controls)))
-            if c_data.height == 0:
-                continue
-
         result = entropy_balance(
             t_data, c_data, covariates, id,
             moment=opts["moment"], max_weight=opts["max_weight"],
         )
 
         if result is not None:
-            # Mark controls as used (global_no)
-            ctrl_ids = result.filter(pl.col("weight") < 1.0 - 1e-10)[id].to_list()
-            # Actually, treated have weight=1.0 and controls have ebal weights
-            # Filter to controls: weight != 1.0 (treated all have exactly 1.0)
-            ctrl_result = result.join(
-                c_data.select(id).unique(), on=id, how="semi"
-            )
-            used_controls.update(ctrl_result[id].to_list())
-            all_weights.append(result)
+            # Tag with cohort period
+            cohort_weights = result.with_columns(pl.lit(t).alias(tm))
+            stacked_weights.append(cohort_weights)
+            n_periods_ok += 1
 
-    if not all_weights:
+    if not stacked_weights:
         if verbose:
             print("  Entropy balancing failed for all periods!")
         return None
 
-    # Combine per-period weights
-    # For treated: weight=1.0 (deduplicate if treated appears in multiple periods' results)
-    # For controls: each appears once (global_no)
-    weights = pl.concat(all_weights).group_by(id).agg(
-        pl.col("weight").first()  # treated get 1.0; controls appear once
+    # Stacked weighted data: (tm, id, weight) — one row per (cohort, unit)
+    weighted_data = pl.concat(stacked_weights).select(tm, id, "weight")
+
+    if verbose:
+        print(f"    Balanced {n_periods_ok}/{len(time_periods)} periods")
+
+    # Collapsed convenience weights: average weight per unit across cohorts
+    # NOTE: This does NOT guarantee per-period balance. Use weighted_data
+    # for cohort-specific analysis.
+    weights = weighted_data.group_by(id).agg(
+        pl.col("weight").mean()
     )
 
     n_treated_weighted = weights.join(
@@ -265,22 +293,35 @@ def _run_ebal(
         print(f"    Treated: {n_treated_weighted}/{n_treated_total}")
         print(f"    Controls weighted: {n_controls_weighted}")
 
-    # Step 3: Balance (weighted)
+    # Step 3: Per-period balance (the correct diagnostic for stacked ebal)
     if verbose:
-        print("  Step 3: balance (weighted)...")
-    balance = compute_balance_weighted(reduced, weights, treat, id, covariates)
+        print("  Step 3: balance (per-period weighted)...")
+
+    # Compute per-period balance using stacked weights
+    from .balance import balance_by_period_weighted
+    agg_balance, detail_balance = balance_by_period_weighted(
+        reduced, weighted_data, treat, id, tm, covariates,
+    )
+
+    # Also compute pooled balance using collapsed weights (for summary)
+    pooled_balance = compute_balance_weighted(reduced, weights, treat, id, covariates)
 
     if verbose:
-        smd_table(balance)
+        smd_table(pooled_balance)
+        if agg_balance.height > 0:
+            max_per_period = agg_balance["max_abs_smd"].max()
+            print(f"  Per-period max|SMD|: {max_per_period:.4f} "
+                  f"(pooled may differ due to cohort aggregation)")
 
     return RollmatchResult(
         matched_data=None,
-        balance=balance,
+        balance=pooled_balance,
         n_treated_total=n_treated_total,
         n_treated_matched=n_treated_weighted,
         n_controls_matched=n_controls_weighted,
         alpha=None,
         weights=weights,
+        weighted_data=weighted_data,
         method="ebal",
     )
 
@@ -294,7 +335,11 @@ def _run_callable(
     verbose: bool,
     **kwargs,
 ) -> RollmatchResult | None:
-    """Run user-defined method via the pluggable per-period interface."""
+    """Run user-defined method via the pluggable per-period interface.
+
+    Each cohort independently calls the user function on the full control
+    pool (stacked design, same as ebal).
+    """
     if verbose:
         n_treat = data.filter(pl.col(treat) == 1)[id].n_unique()
         n_ctrl = data.filter(pl.col(treat) == 0)[id].n_unique()
@@ -307,13 +352,12 @@ def _run_callable(
     if reduced.height == 0:
         return None
 
-    # Step 2: Per-period custom method
+    # Step 2: Per-period custom method on full control pool
     time_periods = (
         reduced.filter(pl.col(treat) == 1)[tm].unique().sort().to_list()
     )
 
-    all_weights = []
-    used_controls: set = set()
+    stacked_weights = []
     n_treated_total = reduced.filter(pl.col(treat) == 1)[id].n_unique()
 
     for t in time_periods:
@@ -323,26 +367,19 @@ def _run_callable(
         if t_data.height == 0 or c_data.height == 0:
             continue
 
-        if used_controls:
-            c_data = c_data.filter(~pl.col(id).is_in(list(used_controls)))
-            if c_data.height == 0:
-                continue
-
         result = method_fn(t_data, c_data, covariates, id, **kwargs)
 
         if result is not None:
-            ctrl_result = result.join(
-                c_data.select(id).unique(), on=id, how="semi"
-            )
-            used_controls.update(ctrl_result[id].to_list())
-            all_weights.append(result)
+            cohort_weights = result.with_columns(pl.lit(t).alias(tm))
+            stacked_weights.append(cohort_weights)
 
-    if not all_weights:
+    if not stacked_weights:
         return None
 
-    weights = pl.concat(all_weights).group_by(id).agg(
-        pl.col("weight").first()
-    )
+    weighted_data = pl.concat(stacked_weights).select(tm, id, "weight")
+
+    # Collapsed convenience weights
+    weights = weighted_data.group_by(id).agg(pl.col("weight").mean())
 
     n_treated_weighted = weights.join(
         reduced.filter(pl.col(treat) == 1).select(id).unique(),
@@ -366,6 +403,7 @@ def _run_callable(
         n_controls_matched=n_controls_weighted,
         alpha=None,
         weights=weights,
+        weighted_data=weighted_data,
         method="custom",
     )
 
@@ -407,9 +445,10 @@ def rollmatch(
           Kwargs: alpha, num_matches, replacement, standard_deviation,
           model_type, match_on, block_size.
         - ``"ebal"``: Entropy balancing (Hainmueller 2012). Directly
-          optimizes control weights for exact covariate balance.
-          Uses global_no replacement (each control in at most one
-          cohort). Kwargs: moment (1/2/3), max_weight.
+          optimizes control weights for exact per-period covariate
+          balance. Each cohort independently weights the full control
+          pool (stacked design). Returns per-cohort weights in
+          ``weighted_data``. Kwargs: moment (1/2/3), max_weight.
         - callable: User-defined function with signature
           ``fn(treated_data, control_data, covariates, id, **kwargs)``
           returning ``pl.DataFrame`` with columns [id, weight].

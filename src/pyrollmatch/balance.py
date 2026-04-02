@@ -364,7 +364,9 @@ def balance_by_period_weighted(
     data : pl.DataFrame
         Reduced data.
     weights : pl.DataFrame
-        Unit weights with columns [id, weight].
+        Unit weights. Either stacked [tm, id, weight] (per-cohort
+        weights) or collapsed [id, weight]. If stacked, per-cohort
+        weights are used for each period's balance computation.
     treat, id, tm : str
         Column names.
     covariates : list[str]
@@ -374,7 +376,12 @@ def balance_by_period_weighted(
     -------
     (aggregate, detail) with same schemas as balance_by_period().
     """
-    weighted = data.join(weights, on=id, how="inner")
+    # Detect stacked vs collapsed weights
+    stacked = tm in weights.columns
+    if stacked:
+        weighted = data.join(weights, on=[tm, id], how="inner")
+    else:
+        weighted = data.join(weights, on=id, how="inner")
     time_periods = weighted[tm].unique().sort().to_list()
 
     detail_rows = []

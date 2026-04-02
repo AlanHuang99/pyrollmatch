@@ -54,7 +54,7 @@ from .diagnostics import (
     balance_test_weighted, equivalence_test_weighted,
 )
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 __all__ = [
     "rollmatch",
     "RollmatchResult",

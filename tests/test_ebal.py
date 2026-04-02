@@ -163,6 +163,11 @@ class TestRollmatchEbal:
         assert result.alpha is None
         assert result.weights.height > 0
         assert result.balance.height == 3  # 3 covariates
+        # Stacked weighted_data should be present
+        assert result.weighted_data is not None
+        assert "time" in result.weighted_data.columns
+        assert "unit_id" in result.weighted_data.columns
+        assert "weight" in result.weighted_data.columns
 
     def test_ebal_achieves_per_period_balance(self, data):
         """Ebal achieves near-zero per-period SMD (balance by construction)."""
@@ -174,11 +179,13 @@ class TestRollmatchEbal:
             method="ebal", moment=1, verbose=False,
         )
         assert result is not None
+        assert result.weighted_data is not None
 
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
+        # Use stacked weighted_data for per-period balance (the correct approach)
         agg, _ = balance_by_period_weighted(
-            reduced, result.weights, "treat", "unit_id", "time",
+            reduced, result.weighted_data, "treat", "unit_id", "time",
             ["x1", "x2", "x3"],
         )
         # Per-period balance should be near-exact
@@ -264,6 +271,7 @@ class TestRollmatchEbal:
         assert result is not None
         assert result.method == "custom"
         assert result.weights.height > 0
+        assert result.weighted_data is not None
 
 
 # ---------------------------------------------------------------------------
