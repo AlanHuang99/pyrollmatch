@@ -1,18 +1,8 @@
 # pyrollmatch
 
-> **Alpha** (v0.1.x) — This package is in early development. Results have been validated against R rollmatch on synthetic data, but edge cases may remain. APIs are not stable and may change without notice. **Please verify critical results independently.**
+Matching and weighting for staggered treatment adoption studies in Python.
 
-Fast rolling entry matching for staggered adoption studies in Python.
-
-High-performance reimplementation of the R [rollmatch](https://github.com/RTIInternational/rollmatch) package using **polars** + **numpy**, with 8 propensity score models and comprehensive post-matching diagnostics.
-
-| | R rollmatch | pyrollmatch |
-|---|---|---|
-| Max scale | ~5K treated (crashes) | **90K+ treated** |
-| 10K × 30K | OOM (5.8B row join) | **1.7 seconds** |
-| Scoring models | Logistic only | **8 models** |
-| Diagnostics | SMD only | SMD + t-test + VR + KS + TOST |
-| Data library | dplyr (deprecated APIs) | polars |
+Built on **polars** + **numpy/scipy** for performance on large panel datasets (100K+ units). Supports nearest-neighbor matching (propensity score and pairwise distance), entropy balancing, and comprehensive balance diagnostics.
 
 ## Installation
 
@@ -31,270 +21,295 @@ pip install -e ".[dev]"
 
 ```python
 import polars as pl
-from pyrollmatch import rollmatch, alpha_sweep
+from pyrollmatch import rollmatch
 
-# Panel data: unit × time with treatment indicator
 data = pl.read_parquet("panel_data.parquet")
 
-# Rolling entry matching
 result = rollmatch(
     data,
-    treat="treat",              # binary treatment group indicator (1=treated, 0=control)
-    tm="time_period",           # time period (integer)
-    entry="entry_time",         # treatment onset period for treated units;
-                                # for controls, set to any value > max(time_period)
-    id="unit_id",               # unit identifier
-    covariates=["x1", "x2"],    # matching covariates
-    lookback=1,                 # periods to look back for baseline
-    alpha=0.1,                  # caliper = alpha × pooled_SD
-    num_matches=3,              # controls per treated
-    replacement="cross_cohort", # control reuse policy (see below)
-    model_type="logistic",      # propensity score model
-)
-
-# Results
-result.balance      # SMD table (polars DataFrame)
-result.weights      # unit_id → weight (polars DataFrame)
-result.matched_data # treat_id, control_id, difference
-```
-
-### Alpha Sweep
-
-Find the optimal caliper automatically:
-
-```python
-summary, best = alpha_sweep(
-    data, treat="treat", tm="time", entry="entry_time", id="unit_id",
+    treat="treat",
+    tm="time",
+    entry="entry_time",
+    id="unit_id",
     covariates=["x1", "x2", "x3"],
-    alphas=[0.01, 0.02, 0.05, 0.1, 0.15, 0.2],
-)
-# summary: alpha, match_rate, max|SMD|, all_pass
-# best: RollmatchResult from the best alpha
-```
-
-### Control Replacement Modes
-
-The `replacement` parameter controls whether a control unit can be reused across matching:
-
-| Mode | `replacement=` | Within-period reuse | Cross-period reuse | Best for |
-|---|---|---|---|---|
-| **Unrestricted** | `"unrestricted"` or `True` | Yes | Yes | Maximizing match rate |
-| **Cross-cohort** | `"cross_cohort"` or `False` | No | Yes | R rollmatch compatibility |
-| **Global no** | `"global_no"` | No | No | Unique control assignments |
-
-```python
-# Each control matched at most once across ALL periods
-result = rollmatch(data, ..., replacement="global_no")
-
-# No reuse within a period, but allowed across periods (R rollmatch default)
-result = rollmatch(data, ..., replacement="cross_cohort")
-
-# Controls can match multiple treated units freely
-result = rollmatch(data, ..., replacement="unrestricted")
-```
-
-> **Note on `"global_no"`**: Because controls are consumed as periods are processed (earliest first), the order of periods affects results. This mode also changes the estimand — later cohorts may get worse matches as the control pool shrinks. Use `balance_by_period()` to check whether later cohorts suffer.
-
-> **Backward compatibility**: `replacement=True` maps to `"unrestricted"` and `replacement=False` maps to `"cross_cohort"`, matching the original behavior.
-
-### Per-Period Balance Diagnostics
-
-Pooled SMD can mask within-cohort imbalance through cancellation. Use `balance_by_period()` to check each entry cohort individually:
-
-```python
-from pyrollmatch import balance_by_period, reduce_data, score_data
-
-reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
-scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
-
-agg, detail = balance_by_period(
-    scored, result.matched_data,
-    "treat", "unit_id", "time", ["x1", "x2", "x3"],
+    ps_caliper=0.2,
+    num_matches=1,
 )
 
-# agg: covariate × {wtd_mean_smd, median_abs_smd, max_abs_smd, n_periods}
-# detail: period × covariate × {n_treated, n_controls, smd}
+result.balance         # covariate balance table (SMDs)
+result.matched_data    # match pairs: [tm, treat_id, control_id, difference]
+result.weights         # unit-level weights: [id, weight]
 ```
 
-The aggregate table reports three summary measures per covariate:
-- **`wtd_mean_smd`** — weighted mean SMD (weighted by n_treated per period)
-- **`median_abs_smd`** — robust central tendency
-- **`max_abs_smd`** — most conservative, catches the worst cohort
+## Methods
 
-### Post-Matching Diagnostics
+### Nearest-Neighbor Matching (default)
+
+Greedy nearest-neighbor matching on propensity scores or pairwise covariate distances. Supports PS calipers, per-variable calipers, matching order, and three replacement modes.
+
+```python
+# Propensity score matching (logistic regression)
+result = rollmatch(data, ..., ps_caliper=0.2, num_matches=1)
+
+# Mahalanobis distance matching
+result = rollmatch(data, ..., model_type="mahalanobis")
+
+# Mahalanobis matching with PS caliper (MatchIt mahvars pattern)
+result = rollmatch(data, ..., ps_caliper=0.25, mahvars=["x1", "x2"])
+```
+
+### Entropy Balancing
+
+Direct covariate balance via convex optimization (Hainmueller 2012). Each entry cohort weights the full control pool independently (stacked design).
+
+```python
+result = rollmatch(data, ..., method="ebal", moment=1)
+
+result.weights         # unit weights
+result.weighted_data   # per-cohort weights [tm, id, weight]
+```
+
+### Custom Methods
+
+User-defined per-period weighting functions:
+
+```python
+def my_method(treated_data, control_data, covariates, id, **kwargs):
+    # Return pl.DataFrame with columns [id, weight]
+    ...
+
+result = rollmatch(data, ..., method=my_method)
+```
+
+---
+
+## Scoring Models
+
+11 model types via the `model_type` parameter:
+
+### Propensity score models
+
+Fit a classifier, match on `|score_i - score_j|`.
+
+| `model_type` | Description |
+|---|---|
+| `"logistic"` | Standard logistic regression **(default)** |
+| `"probit"` | Probit model (inverse normal CDF) |
+| `"gbm"` | Gradient boosting (`HistGradientBoostingClassifier`) |
+| `"rf"` | Random forest |
+| `"lasso"` | L1-regularized logistic |
+| `"ridge"` | L2-regularized logistic |
+| `"elasticnet"` | L1+L2 regularized logistic |
+
+### Distance-based models
+
+Pairwise covariate distances. No propensity model fitted.
+
+| `model_type` | Description |
+|---|---|
+| `"mahalanobis"` | Mahalanobis distance (pooled within-group covariance, MatchIt convention) |
+| `"scaled_euclidean"` | Euclidean on covariates standardized by pooled within-group SD |
+| `"robust_mahalanobis"` | Rank-based Mahalanobis (Rosenbaum 2010). Robust to outliers |
+| `"euclidean"` | Raw Euclidean distance |
+
+---
+
+## Matching Parameters
+
+### Caliper
+
+```python
+# Propensity score caliper: ps_caliper * pooled_SD
+result = rollmatch(data, ..., ps_caliper=0.2)
+
+# Per-variable calipers (in SD units by default)
+result = rollmatch(data, ..., caliper={"age": 0.5, "income": 0.3})
+
+# Per-variable calipers in raw units
+result = rollmatch(data, ..., caliper={"age": 5}, std_caliper=False)
+```
+
+`ps_caliper_std` controls how the pooled SD is computed: `"average"` (default), `"weighted"`, or `"none"` (raw units).
+
+### Replacement Modes
+
+Controls whether control units can be reused across matches.
+
+| `replacement=` | Within period | Across periods | Use case |
+|---|---|---|---|
+| `"unrestricted"` | Reuse freely | Reuse freely | Maximize match rate |
+| **`"cross_cohort"`** | No reuse | Reuse allowed | **Default.** Balanced within-period |
+| `"global_no"` | No reuse | No reuse | Strictest. Each control used at most once |
+
+### Matching Order (`m_order`)
+
+Controls which treated units are matched first. Matters when replacement is constrained.
+
+| `m_order=` | Behavior |
+|---|---|
+| `"largest"` | Highest PS first **(default for PS models)**. Hard-to-match units get first pick |
+| `"smallest"` | Lowest PS first |
+| `"random"` | Random order |
+| `"data"` | Original data order **(default for distance models)** |
+
+### The `mahvars` Pattern
+
+Match on Mahalanobis distance of specific covariates while using a propensity score caliper to restrict the pool. Follows the MatchIt `mahvars` convention.
+
+```python
+result = rollmatch(
+    data, ...,
+    covariates=["x1", "x2", "x3"],   # PS estimated on all covariates
+    ps_caliper=0.25,                   # PS caliper for pool restriction
+    mahvars=["x1", "x2"],             # Mahalanobis matching on these
+)
+```
+
+---
+
+## Balance Diagnostics
+
+### Post-Matching Balance
 
 ```python
 from pyrollmatch import balance_test, equivalence_test
-from pyrollmatch import reduce_data, score_data
-
-reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
-scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
 
 # SMD + t-test + variance ratio + KS test
-diag = balance_test(scored, result.matched_data,
-                    "treat", "unit_id", "time", ["x1", "x2", "x3"])
+diag = balance_test(scored_data, result.matched_data,
+                    "treat", "unit_id", "time", covariates)
 
 # TOST equivalence test (Hartman & Hidalgo 2018)
-equiv = equivalence_test(scored, result.matched_data,
-                         "treat", "unit_id", "time", ["x1", "x2", "x3"])
+equiv = equivalence_test(scored_data, result.matched_data,
+                         "treat", "unit_id", "time", covariates)
 ```
 
-## Propensity Score Models
+### Per-Period Balance
 
-8 scoring methods, all accessible via the `model_type` parameter:
-
-| Model | `model_type` | Description | Best for |
-|---|---|---|---|
-| **Logistic** | `"logistic"` | Standard logistic regression (default) | Most cases |
-| **Probit** | `"probit"` | Probit model (Φ⁻¹ transform) | Robustness check |
-| **GBM** | `"gbm"` | Gradient boosting (HistGradientBoosting) | Non-linear relationships |
-| **Random Forest** | `"rf"` | Random forest classifier | High-dimensional, interactions |
-| **Lasso** | `"lasso"` | L1-regularized logistic | Variable selection |
-| **Ridge** | `"ridge"` | L2-regularized logistic | Multicollinearity |
-| **ElasticNet** | `"elasticnet"` | L1+L2 regularized logistic | Combined regularization |
-| **Mahalanobis** | `"mahalanobis"` | No propensity model — covariate distance | Direct covariate matching |
+Pooled SMD can mask within-cohort imbalance. Check each entry cohort:
 
 ```python
-# Use gradient boosting for propensity scores
-result = rollmatch(data, ..., model_type="gbm")
+from pyrollmatch import balance_by_period
 
-# Use Mahalanobis distance (no propensity model)
-result = rollmatch(data, ..., model_type="mahalanobis")
+agg, detail = balance_by_period(
+    scored_data, result.matched_data,
+    "treat", "unit_id", "time", covariates,
+)
+# agg: covariate × {wtd_mean_smd, median_abs_smd, max_abs_smd}
+# detail: period × covariate × {n_treated, n_controls, smd}
 ```
 
-## How It Works
+### Weighted Diagnostics (for ebal/custom)
 
-### Rolling Entry Matching
+```python
+from pyrollmatch import balance_test_weighted, equivalence_test_weighted
 
-For staggered adoption, each treated unit enters at a different time. Rolling entry matching:
-
-1. **`reduce_data()`** — For each treated unit at entry time *t*, select covariates at *t − lookback*. Controls get one observation per treatment entry period.
-
-2. **`score_data()`** — Fit propensity model, compute logit-transformed scores.
-
-3. **`match_all_periods()`** — For each time period, match treated to closest controls within caliper. Uses **block-vectorized numpy broadcasting** (not full cross-join).
-
-4. **`compute_balance()`** — Compare covariate means/SDs before and after matching.
-
-### Key Optimization
-
-R's bottleneck: `inner_join(treated, controls, by=time)` creates N_treated × N_controls rows.
-
-pyrollmatch instead processes treated in **blocks** via numpy broadcasting:
+diag = balance_test_weighted(reduced_data, result.weights,
+                             "treat", "unit_id", covariates)
 ```
-Block of 2000 treated × 64K controls = 128M distances = ~1 GB
-```
-Never materializes the full cross-product as a DataFrame.
+
+---
 
 ## Data Format
 
-Input must be a `polars.DataFrame` in **long panel format** (one row per unit per time period):
+Input: `polars.DataFrame` in **long panel format** (one row per unit per time period).
 
 | Column | Type | Description |
 |---|---|---|
-| `id` | int or str | Unit identifier (e.g., individual, firm, repository) |
-| `tm` | int | Time period, must be integer and monotonically increasing (e.g., 1, 2, ..., 20) |
-| `treat` | int (0 or 1) | **Time-invariant treatment group indicator.** `1` = unit that eventually receives treatment, `0` = unit that never receives treatment. This is NOT a time-varying treatment status — it labels the *group*, not whether treatment is currently active. |
-| `entry` | int | **Treatment onset period** for treated units (the time period when treatment begins). For control units, set this to any value **strictly greater** than the maximum time period in your data. For example, if your panel spans periods 1–20, use `entry=99` or `entry=999` for controls. The specific value does not matter as long as it exceeds `max(tm)`. |
-| covariates | float | Matching variables (e.g., pre-computed rolling means of activity measures) |
+| `id` | int/str | Unit identifier |
+| `tm` | int | Time period (integer, monotonically increasing) |
+| `treat` | int (0/1) | **Time-invariant** treatment group indicator. 1 = eventually treated, 0 = never treated |
+| `entry` | int | Treatment onset period for treated units. For controls: any value > max(tm) or null |
+| covariates | float | Matching variables |
 
-**Example:**
 ```
 unit_id | time | treat | entry_time | x1   | x2
 --------|------|-------|------------|------|-----
-1       | 1    | 1     | 5          | 2.3  | 1.1   <- treated, enters at period 5
+1       | 1    | 1     | 5          | 2.3  | 1.1   <- treated, enters period 5
 1       | 2    | 1     | 5          | 2.5  | 1.0
 ...
-1       | 5    | 1     | 5          | 4.1  | 1.8   <- treatment starts here
-...
-101     | 1    | 0     | 99         | 1.8  | 0.9   <- control, entry=99 (sentinel)
+101     | 1    | 0     | 99         | 1.8  | 0.9   <- control (entry=99 sentinel)
 101     | 2    | 0     | 99         | 1.9  | 1.0
 ```
 
-## API Reference
+---
 
-### Core Functions
+## Pipeline
 
-| Function | Description |
-|---|---|
-| `rollmatch()` | Full rolling entry matching pipeline |
-| `alpha_sweep()` | Try multiple calipers, select best |
-| `reduce_data()` | Construct quasi-panel for matching |
-| `score_data()` | Compute propensity scores (8 models) |
+For advanced use, each step is independently callable:
 
-### Diagnostics
+```python
+from pyrollmatch import reduce_data, score_data, compute_balance
 
-| Function | Description |
-|---|---|
-| `balance_test()` | SMD + t-test + variance ratio + KS test |
-| `equivalence_test()` | TOST equivalence test (Hartman & Hidalgo 2018) |
-| `compute_balance()` | Covariate balance table (pooled across all periods) |
-| `balance_by_period()` | Per-period SMD with aggregate summary |
-| `smd_table()` | Print formatted SMD table |
+# 1. Reduce: select baseline covariates for each entry cohort
+reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id", lookback=1)
 
-### RollmatchResult
+# 2. Score: fit model, compute scores/distances
+scored = score_data(reduced, ["x1", "x2", "x3"], "treat", model_type="logistic")
+scored.data          # DataFrame with "score" column
+scored.model         # fitted sklearn classifier
 
-| Attribute | Type | Description |
-|---|---|---|
-| `matched_data` | `pl.DataFrame` | `treat_id`, `control_id`, `difference` |
-| `balance` | `pl.DataFrame` | SMD for each covariate |
-| `weights` | `pl.DataFrame` | `id`, `weight` |
-| `n_treated_matched` | `int` | Number matched |
-| `n_treated_total` | `int` | Total treated |
-| `alpha` | `float` | Caliper used |
+# 3. Match: via rollmatch() or match_all_periods() directly
 
-## Validation Against R rollmatch
+# 4. Balance: assess covariate balance
+balance = compute_balance(scored.data, matches, "treat", "unit_id", "time", covariates)
+```
 
-Tested on identical synthetic data across 15 configurations:
-
-| Metric | Result |
-|---|---|
-| Propensity score correlation | **≥ 0.9999** across all configs |
-| Match count agreement | Within ±3% |
-| Balance quality (max\|SMD\|) | Both achieve < 0.05 |
-
-Pair-level overlap varies by caliper tightness (3%–71%) due to different GLM solvers (sklearn vs R glm). This is expected — **balance quality is what matters, not pair identity**.
-
-> **Note on matching algorithm**: Our greedy matching processes treated units sequentially (per-treated nearest neighbor), while R rollmatch uses a global greedy approach (best-first across all treated). Both are valid greedy algorithms, but may produce different match assignments. Balance quality is comparable.
+---
 
 ## Performance
 
-| Scale | Runtime | Match rate |
-|---|---:|---:|
-| 500 × 2,000 | 0.03s | 100% |
-| 1,000 × 3,000 | 0.05s | 100% |
-| 5,000 × 15,000 | 0.10s | 100% |
-| 10,000 × 30,000 | 1.7s | 99.99% |
+| Scale (treated x controls) | Runtime |
+|---|---:|
+| 1,000 x 10,000 | ~0.5s |
+| 1,000 x 50,000 | ~0.9s |
+| 10,000 x 100,000 | ~3s |
 
-R rollmatch crashes at 10K treated due to dplyr's 2.1B row limit.
+Block-vectorized matching: O(block_size x N_controls) memory per iteration. Never materializes the full cross-product.
+
+---
+
+## API Reference
+
+See **[REFERENCE.md](REFERENCE.md)** for the complete API reference, including all parameters, return types, and migration guide from v0.0.x.
+
+**Generate HTML docs:**
+```bash
+uv run pdoc pyrollmatch -o docs/
+```
+
+---
+
+## Testing
+
+```bash
+uv run pytest tests/           # 151 tests
+uv run pytest tests/ -k stress # stress/scale tests
+```
+
+Tests include synthetic data, vendored Lalonde dataset (MatchIt), and a 6K-unit staggered panel fixture with confounded treatment assignment.
+
+---
 
 ## Design Principles
 
-- **Polars-first**: Native polars DataFrames throughout. No pandas dependency.
-- **Reproducible**: Deterministic with fixed `random_state`. Same input → same output.
-- **Scalable**: Block-vectorized matching, O(block × N_controls) memory per iteration.
-- **Validated**: 44 tests, R-validated across 15 synthetic configurations.
-- **Modular**: Each step (reduce → score → match → balance) is independently usable.
+- **Polars-native**: No pandas dependency. Polars DataFrames throughout.
+- **MatchIt-aligned**: Distance metrics, pooled covariance, matching order follow MatchIt conventions.
+- **Reproducible**: Deterministic with fixed random state. Same input, same output.
+- **Scalable**: Block-vectorized numpy matching, incremental availability masks, `argpartition` top-k.
+- **Modular**: Each pipeline step (reduce, score, match, balance) is independently usable.
+- **Tested**: 151 tests across 10 test files, including real-world data.
+
+## Acknowledgements
+
+This project was inspired by the [rollmatch](https://github.com/RTIInternational/rollmatch) R package by RTI International (Witman et al. 2018). Distance metrics and matching conventions follow [MatchIt](https://kosukeimai.github.io/MatchIt/) (Imai, King, Stuart 2011).
 
 ## References
 
-- Witman, A., Acquah, J., Alvelais, A., et al. (2018). "Comparison Group Selection in the Presence of Rolling Entry." *Health Services Research*, 54(1), 262–270. doi:10.1111/1475-6773.13086
-- RTI International. `rollmatch` R package. https://github.com/RTIInternational/rollmatch
-- Hartman, E., & Hidalgo, F. D. (2018). "An Equivalence Approach to Balance and Placebo Tests." *American Journal of Political Science*, 62(4), 1000–1013. doi:10.1111/ajps.12387
-
-## Status & Contributing
-
-This package is under **active development**. We welcome:
-
-- **Bug reports** — if you encounter unexpected behavior, please open an issue with a minimal reproducible example
-- **Feature requests** — suggestions for new matching methods, diagnostics, or API improvements
-- **Contributions** — pull requests are welcome; please open an issue first to discuss
-
-Please be cautious when using this package for published research. While we have validated against the R rollmatch package across multiple configurations (see [Validation](#validation-against-r-rollmatch)), this is alpha software. We strongly recommend:
-
-1. **Cross-checking** results against an established implementation (R rollmatch, R MatchIt) for critical analyses
-2. **Inspecting balance diagnostics** carefully before proceeding to estimation
-3. **Reporting any discrepancies** you find via [GitHub Issues](https://github.com/AlanHuang99/pyrollmatch/issues)
+- Witman, A., et al. (2018). "Comparison Group Selection in the Presence of Rolling Entry." *Health Services Research*, 54(1), 262-270.
+- Hainmueller, J. (2012). "Entropy Balancing for Causal Effects." *Political Analysis*, 20(1), 25-46.
+- Imai, K., King, G., Stuart, E. (2011). MatchIt: Nonparametric Preprocessing for Parametric Causal Inference. *Journal of Statistical Software*, 42(8).
+- Rosenbaum, P. (2010). *Design of Observational Studies*, ch. 8.
+- Hartman, E. & Hidalgo, F. D. (2018). "An Equivalence Approach to Balance and Placebo Tests." *American Journal of Political Science*, 62(4), 1000-1013.
 
 ## License
 
