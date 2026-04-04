@@ -184,17 +184,17 @@ def _build_model(model_type: str, max_iter: int = 1000, random_state: int = 42):
         )
     elif model_type == "lasso":
         return LogisticRegression(
-            l1_ratio=1.0, solver="saga", max_iter=max_iter,
+            penalty="l1", solver="saga", max_iter=max_iter,
             random_state=random_state,
         )
     elif model_type == "ridge":
         return LogisticRegression(
-            l1_ratio=0.0, solver="lbfgs", max_iter=max_iter,
+            penalty="l2", solver="lbfgs", max_iter=max_iter,
             random_state=random_state,
         )
     elif model_type == "elasticnet":
         return LogisticRegression(
-            l1_ratio=0.5, solver="saga",
+            penalty="elasticnet", l1_ratio=0.5, solver="saga",
             max_iter=max_iter, random_state=random_state,
         )
     elif model_type == "gbm":

@@ -1,0 +1,81 @@
+{
+  "seed": 20260404,
+  "n_rows": 108000,
+  "n_units": 6000,
+  "n_periods": 18,
+  "n_treated_units": 1800,
+  "n_control_units": 4200,
+  "entry_periods": [
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "control_entry_sentinel": 99,
+  "covariates": [
+    "risk_score",
+    "size_index",
+    "engagement",
+    "growth_index",
+    "stability_index",
+    "cost_index",
+    "support_need",
+    "activity_index"
+  ],
+  "columns": [
+    "unit_id",
+    "time",
+    "treat",
+    "entry_time",
+    "treat_active",
+    "event_time",
+    "region",
+    "risk_score",
+    "size_index",
+    "engagement",
+    "growth_index",
+    "stability_index",
+    "cost_index",
+    "support_need",
+    "activity_index",
+    "outcome"
+  ],
+  "entry_counts_treated": [
+    {
+      "entry_time": 7,
+      "n_units": 225
+    },
+    {
+      "entry_time": 8,
+      "n_units": 225
+    },
+    {
+      "entry_time": 9,
+      "n_units": 225
+    },
+    {
+      "entry_time": 10,
+      "n_units": 225
+    },
+    {
+      "entry_time": 11,
+      "n_units": 225
+    },
+    {
+      "entry_time": 12,
+      "n_units": 225
+    },
+    {
+      "entry_time": 13,
+      "n_units": 225
+    },
+    {
+      "entry_time": 14,
+      "n_units": 225
+    }
+  ]
+}

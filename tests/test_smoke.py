@@ -6,6 +6,7 @@ import pytest
 from pyrollmatch import reduce_data, score_data, rollmatch
 from pyrollmatch.balance import compute_balance
 from pyrollmatch.diagnostics import balance_test, equivalence_test
+from tests.real_world import REAL_WORLD_COVARIATES, make_lalonde_panel
 
 
 def make_synthetic_data(
@@ -130,6 +131,27 @@ class TestScoreData:
         assert scored["score"].null_count() == 0
         assert scored.height == reduced.height
 
+    @pytest.mark.parametrize(
+        "model_type,penalty,solver,l1_ratio",
+        [
+            ("lasso", "l1", "saga", None),
+            ("ridge", "l2", "lbfgs", None),
+            ("elasticnet", "elasticnet", "saga", 0.5),
+        ],
+    )
+    def test_regularized_model_configuration(
+        self, synth_data, model_type, penalty, solver, l1_ratio,
+    ):
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        result = score_data(
+            reduced, ["x1", "x2", "x3"], "treat",
+            model_type=model_type, match_on="logit",
+        )
+        params = result.model.get_params()
+        assert params["penalty"] == penalty
+        assert params["solver"] == solver
+        assert params["l1_ratio"] == l1_ratio
+
     def test_mahalanobis_scores(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
@@ -174,8 +196,11 @@ class TestRollmatch:
             verbose=False,
         )
         # Treated should have weight=1
-        treated_ids = result.matched_data["treat_id"].unique()
-        treat_weights = result.weights.filter(pl.col("unit_id").is_in(treated_ids))
+        treated_ids = (
+            result.matched_data.select("treat_id").unique()
+            .rename({"treat_id": "unit_id"})
+        )
+        treat_weights = result.weights.join(treated_ids, on="unit_id", how="semi")
         assert (treat_weights["weight"] == 1.0).all()
 
     def test_balance_computed(self, synth_data):
@@ -246,3 +271,24 @@ class TestDiagnostics:
         assert equiv.height == 3
         assert "tost_p" in equiv.columns
         assert "equivalent" in equiv.columns
+
+
+class TestRealWorldSmoke:
+    def test_lalonde_example_improves_balance(self):
+        """Real-world example adapted from MatchIt's Lalonde dataset."""
+        data = make_lalonde_panel()
+
+        result = rollmatch(
+            data, "treat", "time", "entry_time", "unit_id",
+            covariates=REAL_WORLD_COVARIATES,
+            ps_caliper=0.2, num_matches=1, replacement="cross_cohort",
+            verbose=False,
+        )
+
+        assert result is not None
+        assert result.n_treated_matched >= 160
+
+        max_raw_smd = result.balance["full_smd"].abs().max()
+        max_matched_smd = result.balance["matched_smd"].abs().max()
+        assert max_matched_smd < max_raw_smd
+        assert max_matched_smd < 0.15

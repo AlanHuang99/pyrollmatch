@@ -5,6 +5,11 @@ import numpy as np
 import pytest
 import time
 from pyrollmatch import rollmatch
+from tests.real_world import (
+    LALONDE_TREATED_COUNT,
+    REAL_WORLD_COVARIATES,
+    make_lalonde_panel,
+)
 from tests.test_smoke import make_synthetic_data
 
 
@@ -78,3 +83,22 @@ class TestLargeScale:
         )
         assert result is not None
         assert result.balance.height == n_covs
+
+    def test_real_world_pressure_panel(self):
+        """Replicated Lalonde panel stays matchable at larger scale."""
+        data = make_lalonde_panel(repetitions=8)
+
+        start = time.time()
+        result = rollmatch(
+            data, "treat", "time", "entry_time", "unit_id",
+            covariates=REAL_WORLD_COVARIATES,
+            ps_caliper=0.2, num_matches=1, replacement="cross_cohort",
+            block_size=512, verbose=False,
+        )
+        elapsed = time.time() - start
+
+        assert result is not None
+        assert result.n_treated_total == LALONDE_TREATED_COUNT * 8
+        assert result.n_treated_matched >= int(result.n_treated_total * 0.85)
+        assert result.balance["matched_smd"].abs().max() < 0.2
+        print(f"\n  Lalonde x8: {elapsed:.2f}s, matched={result.n_treated_matched}/{result.n_treated_total}")

@@ -4,6 +4,7 @@ import polars as pl
 import numpy as np
 import pytest
 from pyrollmatch import rollmatch
+from tests.real_world import REAL_WORLD_COVARIATES, make_lalonde_panel
 from tests.test_smoke import make_synthetic_data
 
 
@@ -143,3 +144,33 @@ class TestParameterSensitivity:
 
         assert r1.n_treated_matched == r2.n_treated_matched
         assert r1.matched_data.height == r2.matched_data.height
+
+
+class TestRealWorldRobustness:
+    def test_lalonde_block_size_consistency(self):
+        """Real-world panel should be invariant to matcher block size."""
+        data = make_lalonde_panel()
+
+        r_small = rollmatch(
+            data, "treat", "time", "entry_time", "unit_id",
+            covariates=REAL_WORLD_COVARIATES,
+            ps_caliper=0.2, num_matches=1, replacement="cross_cohort",
+            block_size=8, verbose=False,
+        )
+        r_large = rollmatch(
+            data, "treat", "time", "entry_time", "unit_id",
+            covariates=REAL_WORLD_COVARIATES,
+            ps_caliper=0.2, num_matches=1, replacement="cross_cohort",
+            block_size=256, verbose=False,
+        )
+
+        assert r_small is not None and r_large is not None
+        assert r_small.n_treated_matched == r_large.n_treated_matched
+
+        small_pairs = r_small.matched_data.select("time", "treat_id", "control_id").sort(
+            ["time", "treat_id", "control_id"]
+        )
+        large_pairs = r_large.matched_data.select("time", "treat_id", "control_id").sort(
+            ["time", "treat_id", "control_id"]
+        )
+        assert small_pairs.equals(large_pairs)
