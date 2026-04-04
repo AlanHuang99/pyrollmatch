@@ -183,18 +183,20 @@ def _build_model(model_type: str, max_iter: int = 1000, random_state: int = 42):
             max_iter=max_iter, solver="lbfgs", random_state=random_state,
         )
     elif model_type == "lasso":
+        # sklearn ≥1.8: use l1_ratio=1 instead of deprecated penalty="l1"
         return LogisticRegression(
-            penalty="l1", solver="saga", max_iter=max_iter,
+            l1_ratio=1.0, solver="saga", max_iter=max_iter,
             random_state=random_state,
         )
     elif model_type == "ridge":
+        # sklearn ≥1.8: use l1_ratio=0 instead of deprecated penalty="l2"
         return LogisticRegression(
-            penalty="l2", solver="lbfgs", max_iter=max_iter,
+            l1_ratio=0.0, solver="lbfgs", max_iter=max_iter,
             random_state=random_state,
         )
     elif model_type == "elasticnet":
         return LogisticRegression(
-            penalty="elasticnet", l1_ratio=0.5, solver="saga",
+            l1_ratio=0.5, solver="saga",
             max_iter=max_iter, random_state=random_state,
         )
     elif model_type == "gbm":

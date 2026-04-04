@@ -132,15 +132,15 @@ class TestScoreData:
         assert scored.height == reduced.height
 
     @pytest.mark.parametrize(
-        "model_type,penalty,solver,l1_ratio",
+        "model_type,solver,l1_ratio",
         [
-            ("lasso", "l1", "saga", None),
-            ("ridge", "l2", "lbfgs", None),
-            ("elasticnet", "elasticnet", "saga", 0.5),
+            ("lasso", "saga", 1.0),
+            ("ridge", "lbfgs", 0.0),
+            ("elasticnet", "saga", 0.5),
         ],
     )
     def test_regularized_model_configuration(
-        self, synth_data, model_type, penalty, solver, l1_ratio,
+        self, synth_data, model_type, solver, l1_ratio,
     ):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         result = score_data(
@@ -148,7 +148,6 @@ class TestScoreData:
             model_type=model_type, match_on="logit",
         )
         params = result.model.get_params()
-        assert params["penalty"] == penalty
         assert params["solver"] == solver
         assert params["l1_ratio"] == l1_ratio
 
