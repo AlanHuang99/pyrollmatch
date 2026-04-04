@@ -85,36 +85,36 @@ class TestReduceData:
 class TestScoreData:
     def test_adds_score_column(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
         assert "score" in scored.columns
         assert scored["score"].null_count() == 0
 
     def test_logit_scores_unbounded(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="logit")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="logit").data
         # Logit scores can be negative or positive
         assert scored["score"].min() < 0 or scored["score"].max() > 0
 
     def test_pscore_bounded(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="pscore")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat", match_on="pscore").data
         assert scored["score"].min() >= 0
         assert scored["score"].max() <= 1
 
     def test_probit_model(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
-                           model_type="probit", match_on="logit")
+                           model_type="probit", match_on="logit").data
         assert "score" in scored.columns
         assert scored["score"].null_count() == 0
         # Probit scores (Φ⁻¹(p)) are unbounded but typically in [-3, 3]
         assert scored["score"].min() > -10
         assert scored["score"].max() < 10
 
-    def test_return_model(self, synth_data):
+    def test_scored_result_structure(self, synth_data):
         from pyrollmatch.score import ScoredResult
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
-        result = score_data(reduced, ["x1", "x2", "x3"], "treat", return_model=True)
+        result = score_data(reduced, ["x1", "x2", "x3"], "treat")
         assert isinstance(result, ScoredResult)
         assert "score" in result.data.columns
         assert result.model is not None
@@ -125,7 +125,7 @@ class TestScoreData:
     def test_ml_model_types(self, synth_data, model_type):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
-                           model_type=model_type, match_on="logit")
+                           model_type=model_type, match_on="logit").data
         assert "score" in scored.columns
         assert scored["score"].null_count() == 0
         assert scored.height == reduced.height
@@ -133,17 +133,17 @@ class TestScoreData:
     def test_mahalanobis_scores(self, synth_data):
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         scored = score_data(reduced, ["x1", "x2", "x3"], "treat",
-                           model_type="mahalanobis")
+                           model_type="mahalanobis").data
         assert "score" in scored.columns
         assert scored["score"].null_count() == 0
         # Mahalanobis distances are non-negative
         assert scored["score"].min() >= 0
 
-    def test_mahalanobis_return_model_none(self, synth_data):
+    def test_mahalanobis_no_fitted_model(self, synth_data):
         from pyrollmatch.score import ScoredResult
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         result = score_data(reduced, ["x1", "x2", "x3"], "treat",
-                           model_type="mahalanobis", return_model=True)
+                           model_type="mahalanobis")
         assert isinstance(result, ScoredResult)
         assert result.model is None  # No fitted model for mahalanobis
 
@@ -158,7 +158,8 @@ class TestRollmatch:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         assert result is not None
         assert result.matched_data.height > 0
@@ -169,7 +170,8 @@ class TestRollmatch:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         # Treated should have weight=1
         treated_ids = result.matched_data["treat_id"].unique()
@@ -180,7 +182,8 @@ class TestRollmatch:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         assert result.balance.height == 3  # 3 covariates
         assert "matched_smd" in result.balance.columns
@@ -196,7 +199,8 @@ class TestRollmatchModelTypes:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, model_type=model_type, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            model_type=model_type, verbose=False,
         )
         assert result is not None, f"rollmatch returned None for model_type={model_type}"
         assert result.matched_data.height > 0
@@ -211,11 +215,12 @@ class TestDiagnostics:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
 
         diag = balance_test(
             scored, result.matched_data, "treat", "unit_id", "time", ["x1", "x2", "x3"]
@@ -228,11 +233,12 @@ class TestDiagnostics:
         result = rollmatch(
             synth_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
 
         equiv = equivalence_test(
             scored, result.matched_data, "treat", "unit_id", "time", ["x1", "x2", "x3"]

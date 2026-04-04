@@ -95,8 +95,8 @@ def run_python(data: pl.DataFrame, covariates: list[str], alpha: float,
     result = rollmatch(
         data, treat="treat", tm="time", entry="entry_time", id="unit_id",
         covariates=covariates,
-        lookback=1, alpha=alpha, num_matches=num_matches,
-        replacement=True, verbose=False,
+        lookback=1, ps_caliper=alpha, num_matches=num_matches,
+        replacement="unrestricted", verbose=False,
     )
     elapsed = time.time() - start
 
@@ -106,7 +106,7 @@ def run_python(data: pl.DataFrame, covariates: list[str], alpha: float,
     # Score data for diagnostics
     reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id", lookback=1)
     reduced = reduced.drop_nulls(subset=covariates)
-    scored = score_data(reduced, covariates, "treat")
+    scored = score_data(reduced, covariates, "treat").data
 
     # Diagnostics
     diag = balance_test(
@@ -385,7 +385,7 @@ code {{ background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13
 <tr><td>Alpha (caliper)</td><td>{alpha}</td></tr>
 <tr><td>Lookback</td><td>1</td></tr>
 <tr><td>Num matches</td><td>{data_info['num_matches']}</td></tr>
-<tr><td>Replacement</td><td>True</td></tr>
+<tr><td>Replacement</td><td>unrestricted</td></tr>
 <tr><td>Seed</td><td>{SEED}</td></tr>
 </table>
 

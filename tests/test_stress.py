@@ -21,7 +21,8 @@ class TestLargeScale:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.1, num_matches=3, verbose=True,
+            ps_caliper=0.1, num_matches=3, replacement="unrestricted",
+            verbose=True,
         )
         elapsed = time.time() - start
 
@@ -37,7 +38,8 @@ class TestLargeScale:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.1, num_matches=3, block_size=2000, verbose=True,
+            ps_caliper=0.1, num_matches=3, replacement="unrestricted",
+            block_size=2000, verbose=True,
         )
         elapsed = time.time() - start
 
@@ -71,7 +73,8 @@ class TestLargeScale:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=covariates,
-            alpha=0.2, num_matches=3, verbose=True,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=True,
         )
         assert result is not None
         assert result.balance.height == n_covs

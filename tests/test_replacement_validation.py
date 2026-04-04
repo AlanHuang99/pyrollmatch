@@ -129,7 +129,7 @@ class TestReplacementValidation:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="global_no", verbose=False,
         )
         assert result is not None
 
@@ -144,7 +144,7 @@ class TestReplacementValidation:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         assert result is not None
 
@@ -169,7 +169,7 @@ class TestReplacementValidation:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.5, num_matches=5, replacement="unrestricted", verbose=False,
+            ps_caliper=0.5, num_matches=5, replacement="unrestricted", verbose=False,
         )
         assert result is not None
 
@@ -188,7 +188,7 @@ class TestReplacementValidation:
         result = rollmatch(
             scarce_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.5, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.5, num_matches=1, replacement="global_no", verbose=False,
         )
         assert result is not None
         # Cannot exceed the control pool size
@@ -204,12 +204,12 @@ class TestReplacementValidation:
         r_global = rollmatch(
             scarce_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.5, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.5, num_matches=1, replacement="global_no", verbose=False,
         )
         r_cross = rollmatch(
             scarce_data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.5, num_matches=1, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.5, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         assert r_global is not None
         assert r_cross is not None
@@ -227,7 +227,7 @@ class TestReplacementValidation:
             r = rollmatch(
                 scarce_data, "treat", "time", "entry_time", "unit_id",
                 covariates=["x1", "x2", "x3"],
-                alpha=0.5, num_matches=1, replacement=mode, verbose=False,
+                ps_caliper=0.5, num_matches=1, replacement=mode, verbose=False,
             )
             results[mode] = r.matched_data.height if r else 0
 
@@ -247,7 +247,7 @@ class TestReplacementValidation:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="global_no", verbose=False,
         )
         assert result is not None
 
@@ -264,13 +264,13 @@ class TestReplacementValidation:
         """balance_by_period should work with results from all three modes."""
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
 
         for mode in ["unrestricted", "cross_cohort", "global_no"]:
             result = rollmatch(
                 data, "treat", "time", "entry_time", "unit_id",
                 covariates=["x1", "x2", "x3"],
-                alpha=0.3, num_matches=1, replacement=mode, verbose=False,
+                ps_caliper=0.3, num_matches=1, replacement=mode, verbose=False,
             )
             assert result is not None, f"No matches for mode={mode}"
 
@@ -296,13 +296,13 @@ class TestReplacementValidation:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=3, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.3, num_matches=3, replacement="cross_cohort", verbose=False,
         )
         assert result is not None
 
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
 
         agg, _ = balance_by_period(
             scored, result.matched_data,
@@ -336,7 +336,7 @@ class TestReplacementModeComparisonReport:
 
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
 
         modes = ["unrestricted", "cross_cohort", "global_no"]
         results = {}
@@ -345,7 +345,7 @@ class TestReplacementModeComparisonReport:
             r = rollmatch(
                 data, "treat", "time", "entry_time", "unit_id",
                 covariates=["x1", "x2", "x3"],
-                alpha=0.3, num_matches=1, replacement=mode, verbose=False,
+                ps_caliper=0.3, num_matches=1, replacement=mode, verbose=False,
             )
             assert r is not None, f"No matches for mode={mode}"
             results[mode] = r

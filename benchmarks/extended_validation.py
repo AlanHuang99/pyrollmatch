@@ -57,11 +57,11 @@ def generate_data(n_treated, n_controls, n_periods=15, n_covs=5, seed=SEED):
     return pl.DataFrame(rows)
 
 
-def run_py(data, covariates, alpha, num_matches, replacement=True):
+def run_py(data, covariates, alpha, num_matches, replacement="unrestricted"):
     start = time.time()
     result = rollmatch(
         data, treat="treat", tm="time", entry="entry_time", id="unit_id",
-        covariates=covariates, lookback=1, alpha=alpha,
+        covariates=covariates, lookback=1, ps_caliper=alpha,
         num_matches=num_matches, replacement=replacement, verbose=False,
     )
     elapsed = time.time() - start
@@ -77,7 +77,7 @@ def run_py(data, covariates, alpha, num_matches, replacement=True):
     # Get scores
     reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id", lookback=1)
     reduced = reduced.drop_nulls(subset=covariates)
-    scored = score_data(reduced, covariates, "treat")
+    scored = score_data(reduced, covariates, "treat").data
     score_map = dict(zip(scored["unit_id"].to_list(), scored["score"].to_list()))
 
     return {

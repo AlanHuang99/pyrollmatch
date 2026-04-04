@@ -43,8 +43,8 @@ def reduce_data(
     pl.DataFrame
         Reduced dataset: treated at baseline + controls at all baseline periods.
     """
-    if lookback < 1 or lookback > 10:
-        raise ValueError(f"lookback must be between 1 and 10, got {lookback}")
+    if lookback < 1:
+        raise ValueError(f"lookback must be >= 1, got {lookback}")
 
     for col in [treat, tm, entry, id]:
         if col not in data.columns:

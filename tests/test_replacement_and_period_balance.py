@@ -18,40 +18,22 @@ class TestReplacementModes:
     def data(self):
         return make_synthetic_data(n_treated=100, n_controls=500, seed=42)
 
-    def test_unrestricted_bool_compat(self, data):
-        """replacement=True should behave like 'unrestricted'."""
-        r1 = rollmatch(
-            data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, replacement=True, verbose=False,
-        )
-        r2 = rollmatch(
-            data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, replacement="unrestricted", verbose=False,
-        )
-        assert r1.matched_data.height == r2.matched_data.height
-
-    def test_cross_cohort_bool_compat(self, data):
-        """replacement=False should behave like 'cross_cohort'."""
-        r1 = rollmatch(
-            data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=1, replacement=False, verbose=False,
-        )
-        r2 = rollmatch(
-            data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=1, replacement="cross_cohort", verbose=False,
-        )
-        assert r1.matched_data.height == r2.matched_data.height
+    def test_bool_replacement_rejected(self, data):
+        """Boolean replacement values should raise ValueError."""
+        for val in [True, False]:
+            with pytest.raises(ValueError, match="replacement must be"):
+                rollmatch(
+                    data, "treat", "time", "entry_time", "unit_id",
+                    covariates=["x1", "x2", "x3"],
+                    ps_caliper=0.2, num_matches=1, replacement=val, verbose=False,
+                )
 
     def test_cross_cohort_no_reuse_within_period(self, data):
         """Controls used at most once per period in cross_cohort mode."""
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         assert result is not None
         per_period = result.matched_data.group_by(["time", "control_id"]).len()
@@ -62,7 +44,7 @@ class TestReplacementModes:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         assert result is not None
         # Count how many distinct periods each control appears in
@@ -81,7 +63,7 @@ class TestReplacementModes:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="global_no", verbose=False,
         )
         assert result is not None
         # Each control_id should appear at most once across the entire match table
@@ -93,12 +75,12 @@ class TestReplacementModes:
         r_unres = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="unrestricted", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="unrestricted", verbose=False,
         )
         r_global = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="global_no", verbose=False,
         )
         assert r_unres is not None
         assert r_global is not None
@@ -109,12 +91,12 @@ class TestReplacementModes:
         r_cross = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         r_global = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement="global_no", verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="global_no", verbose=False,
         )
         assert r_cross is not None
         assert r_global is not None
@@ -126,7 +108,7 @@ class TestReplacementModes:
             rollmatch(
                 data, "treat", "time", "entry_time", "unit_id",
                 covariates=["x1", "x2", "x3"],
-                alpha=0.2, replacement="invalid", verbose=False,
+                ps_caliper=0.2, num_matches=3, replacement="invalid", verbose=False,
             )
 
 
@@ -144,11 +126,12 @@ class TestBalanceByPeriod:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=3, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1", "x2", "x3"])
-        scored = score_data(reduced, ["x1", "x2", "x3"], "treat")
+        scored = score_data(reduced, ["x1", "x2", "x3"], "treat").data
         return scored, result
 
     def test_returns_two_dataframes(self, matched_result):
@@ -228,11 +211,12 @@ class TestBalanceByPeriod:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1"],
-            alpha=0.2, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         reduced = reduce_data(data, "treat", "time", "entry_time", "unit_id")
         reduced = reduced.drop_nulls(subset=["x1"])
-        scored = score_data(reduced, ["x1"], "treat")
+        scored = score_data(reduced, ["x1"], "treat").data
         agg, detail = balance_by_period(
             scored, result.matched_data,
             "treat", "unit_id", "time", ["x1"],

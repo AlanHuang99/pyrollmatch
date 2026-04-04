@@ -160,7 +160,7 @@ class TestRollmatchEbal:
         assert result is not None
         assert result.method == "ebal"
         assert result.matched_data is None  # no pairs for ebal
-        assert result.alpha is None
+        assert result.ps_caliper is None
         assert result.weights.height > 0
         assert result.balance.height == 3  # 3 covariates
         # Stacked weighted_data should be present
@@ -222,13 +222,14 @@ class TestRollmatchEbal:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            method="matching", alpha=0.2, num_matches=3, verbose=False,
+            method="matching", ps_caliper=0.2, num_matches=3,
+            replacement="unrestricted", verbose=False,
         )
         assert result is not None
         assert result.method == "matching"
         assert result.matched_data is not None
         assert result.matched_data.height > 0
-        assert result.alpha == 0.2
+        assert result.ps_caliper == 0.2
 
     def test_invalid_method(self, data):
         with pytest.raises(ValueError, match="method must be"):
@@ -244,7 +245,7 @@ class TestRollmatchEbal:
             rollmatch(
                 data, "treat", "time", "entry_time", "unit_id",
                 covariates=["x1", "x2", "x3"],
-                method="ebal", alpha=0.1, verbose=False,
+                method="ebal", ps_caliper=0.1, verbose=False,
             )
 
     def test_custom_callable_method(self, data):

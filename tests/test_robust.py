@@ -14,11 +14,13 @@ class TestDeterminism:
 
         r1 = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"], alpha=0.1, verbose=False,
+            covariates=["x1", "x2", "x3"], ps_caliper=0.1,
+            num_matches=3, replacement="unrestricted", verbose=False,
         )
         r2 = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
-            covariates=["x1", "x2", "x3"], alpha=0.1, verbose=False,
+            covariates=["x1", "x2", "x3"], ps_caliper=0.1,
+            num_matches=3, replacement="unrestricted", verbose=False,
         )
 
         assert r1.matched_data.height == r2.matched_data.height
@@ -33,8 +35,8 @@ class TestEdgeCases:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.0001,  # Very tight caliper
-            verbose=False,
+            ps_caliper=0.0001,  # Very tight caliper
+            num_matches=3, replacement="unrestricted", verbose=False,
         )
         # Should return None or very few matches
         if result is not None:
@@ -47,7 +49,8 @@ class TestEdgeCases:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.5, verbose=False,
+            ps_caliper=0.5, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         if result is not None:
             assert result.n_treated_matched <= 1
@@ -59,7 +62,8 @@ class TestEdgeCases:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0, verbose=False,
+            ps_caliper=0, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         assert result is not None
         # Without caliper, should match most/all treated
@@ -72,7 +76,8 @@ class TestEdgeCases:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1"],
-            alpha=0.2, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            verbose=False,
         )
         assert result is not None
         assert result.balance.height == 1
@@ -85,7 +90,8 @@ class TestParameterSensitivity:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, num_matches=1, verbose=False,
+            ps_caliper=0.2, num_matches=1, replacement="unrestricted",
+            verbose=False,
         )
         assert result is not None
         # Each treated should have at most 1 match
@@ -98,19 +104,20 @@ class TestParameterSensitivity:
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=5, verbose=False,
+            ps_caliper=0.3, num_matches=5, replacement="unrestricted",
+            verbose=False,
         )
         assert result is not None
         match_counts = result.matched_data.group_by("treat_id").len()
         assert match_counts["len"].max() <= 5
 
-    def test_replacement_false(self):
-        """replacement=False (cross_cohort): controls used at most once per period."""
+    def test_replacement_cross_cohort(self):
+        """cross_cohort: controls used at most once per period."""
         data = make_synthetic_data(n_controls=500, seed=42)
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.3, num_matches=1, replacement=False, verbose=False,
+            ps_caliper=0.3, num_matches=1, replacement="cross_cohort", verbose=False,
         )
         if result is not None:
             # Within each time period, controls should appear at most once
@@ -124,12 +131,14 @@ class TestParameterSensitivity:
         r1 = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, block_size=50, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            block_size=50, verbose=False,
         )
         r2 = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",
             covariates=["x1", "x2", "x3"],
-            alpha=0.2, block_size=500, verbose=False,
+            ps_caliper=0.2, num_matches=3, replacement="unrestricted",
+            block_size=500, verbose=False,
         )
 
         assert r1.n_treated_matched == r2.n_treated_matched

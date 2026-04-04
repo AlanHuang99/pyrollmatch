@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyrollmatch"
-version = "0.0.8"
+version = "0.1.0"
 description = "Fast rolling entry matching for staggered adoption studies using polars + numpy"
 readme = "README.md"
 license = "MIT"
@@ -53,3 +53,8 @@ packages = ["src/pyrollmatch"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+
+[dependency-groups]
+dev = [
+    "pdoc>=16.0.0",
+]
