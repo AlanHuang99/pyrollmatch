@@ -1,8 +1,6 @@
 # pyrollmatch
 
-Matching and weighting for staggered treatment adoption studies in Python.
-
-Built on **polars** + **numpy/scipy** for performance on large panel datasets (100K+ units). Supports nearest-neighbor matching (propensity score and pairwise distance), entropy balancing, and comprehensive balance diagnostics.
+Matching and weighting for staggered treatment adoption studies in Python, built on polars and numpy.
 
 ## Installation
 
@@ -256,26 +254,10 @@ balance = compute_balance(scored.data, matches, "treat", "unit_id", "time", cova
 
 ---
 
-## Performance
-
-| Scale (treated x controls) | Runtime |
-|---|---:|
-| 1,000 x 10,000 | ~0.5s |
-| 1,000 x 50,000 | ~0.9s |
-| 10,000 x 100,000 | ~3s |
-
-Block-vectorized matching: O(block_size x N_controls) memory per iteration. Never materializes the full cross-product.
-
----
-
 ## API Reference
 
-See **[REFERENCE.md](REFERENCE.md)** for the complete API reference, including all parameters, return types, and migration guide from v0.0.x.
-
-**Generate HTML docs:**
-```bash
-uv run pdoc pyrollmatch -o docs/
-```
+- **[REFERENCE.md](REFERENCE.md)** — parameter tables, return types, migration guide
+- **[API docs](https://alanhuang99.github.io/pyrollmatch/)** — searchable HTML reference (auto-generated from docstrings)
 
 ---
 
@@ -286,22 +268,13 @@ uv run pytest tests/           # 151 tests
 uv run pytest tests/ -k stress # stress/scale tests
 ```
 
-Tests include synthetic data, vendored Lalonde dataset (MatchIt), and a 6K-unit staggered panel fixture with confounded treatment assignment.
+Tests include synthetic data, the Lalonde dataset, and a staggered panel fixture.
 
 ---
 
-## Design Principles
-
-- **Polars-native**: No pandas dependency. Polars DataFrames throughout.
-- **MatchIt-aligned**: Distance metrics, pooled covariance, matching order follow MatchIt conventions.
-- **Reproducible**: Deterministic with fixed random state. Same input, same output.
-- **Scalable**: Block-vectorized numpy matching, incremental availability masks, `argpartition` top-k.
-- **Modular**: Each pipeline step (reduce, score, match, balance) is independently usable.
-- **Tested**: 151 tests across 10 test files, including real-world data.
-
 ## Acknowledgements
 
-This project was inspired by the [rollmatch](https://github.com/RTIInternational/rollmatch) R package by RTI International (Witman et al. 2018). Distance metrics and matching conventions follow [MatchIt](https://kosukeimai.github.io/MatchIt/) (Imai, King, Stuart 2011).
+Inspired by the [rollmatch](https://github.com/RTIInternational/rollmatch) R package by RTI International (Witman et al. 2018). Distance metrics and matching conventions follow [MatchIt](https://kosukeimai.github.io/MatchIt/) (Imai, King, Stuart 2011).
 
 ## References
 
