@@ -52,9 +52,14 @@ class RollmatchResult:
         methods.
     weights : pl.DataFrame
         Unit-level weights ``[id, weight]``. For matching, derived from
-        pairs. For ebal, collapsed across cohorts.
+        pairs. For ebal, mean-collapsed across cohorts — an approximation
+        that does **not** guarantee exact balance for any individual
+        cohort. Prefer ``weighted_data`` for stacked DiD estimation.
     weighted_data : pl.DataFrame or None
         Per-cohort weights ``[tm, id, weight]`` (ebal/custom only).
+        **Recommended for downstream analysis**: use with stacked DiD
+        (cohort fixed effects) to preserve exact per-cohort balance.
+        ``None`` for matching.
     method : str
         Method used: ``"matching"``, ``"ebal"``, or ``"custom"``.
     """
@@ -76,13 +81,13 @@ class RollmatchResult:
 _MATCHING_KWARGS = {
     "ps_caliper", "num_matches", "replacement", "ps_caliper_std",
     "model_type", "block_size",
-    "mahvars", "m_order", "caliper", "std_caliper",
+    "mahvars", "m_order", "caliper", "std_caliper", "random_state",
 }
 
 _MATCHING_DEFAULTS = {
     "ps_caliper": 0,
     "num_matches": 1,
-    "replacement": "cross_cohort",
+    "replacement": "global_no",
     "ps_caliper_std": "average",
     "model_type": "logistic",
     "block_size": 2000,
@@ -90,6 +95,7 @@ _MATCHING_DEFAULTS = {
     "m_order": None,
     "caliper": None,
     "std_caliper": True,
+    "random_state": None,
 }
 
 _EBAL_KWARGS = {"moment", "max_weight"}
@@ -150,11 +156,22 @@ def _run_matching(
     all_covs = list(set(covariates + (mahvars or [])))
     reduced = reduce_data(data, treat, tm, entry, id, lookback)
     reduced = reduced.drop_nulls(subset=all_covs)
+    # Polars drop_nulls doesn't remove NaN; filter those too
+    float_covs = [c for c in all_covs if reduced.schema[c].is_float()]
+    if float_covs:
+        reduced = reduced.filter(
+            pl.all_horizontal(~pl.col(c).is_nan() for c in float_covs)
+        )
     if verbose:
         print(f"    {reduced.height} rows after NaN removal")
     if reduced.height == 0:
         if verbose:
             print("  ERROR: No valid rows")
+        return None
+    n_classes = reduced[treat].n_unique()
+    if n_classes < 2:
+        if verbose:
+            print("  ERROR: Need both treated and control units after filtering")
         return None
 
     # Step 2: Score
@@ -205,6 +222,7 @@ def _run_matching(
         m_order=opts["m_order"],
         caliper=opts["caliper"],
         std_caliper=opts["std_caliper"],
+        random_state=opts["random_state"],
     )
 
     if matches is None or matches.height == 0:
@@ -222,11 +240,18 @@ def _run_matching(
               f"({100*n_treated_matched/n_treated_total:.1f}%)")
         print(f"    Controls: {n_controls_matched}")
 
-    # Step 5: Balance & weights
+    # Step 5: Weights & balance
     if verbose:
         print("  Step 4: balance...")
-    balance = compute_balance(scored, matches, treat, id, tm, covariates)
     weights = _compute_weights(matches, id, opts["num_matches"])
+
+    # Use weighted balance when weights are non-trivial (replacement with
+    # reuse or num_matches > 1); unweighted when all weights are 1.0.
+    all_ones = (weights["weight"] - 1.0).abs().max() < 1e-9
+    if all_ones:
+        balance = compute_balance(scored, matches, treat, id, tm, covariates)
+    else:
+        balance = compute_balance_weighted(scored, weights, treat, id, covariates)
 
     if verbose:
         smd_table(balance)
@@ -271,6 +296,11 @@ def _run_ebal(
         print("  Step 1: reduce_data...")
     reduced = reduce_data(data, treat, tm, entry, id, lookback)
     reduced = reduced.drop_nulls(subset=covariates)
+    float_covs = [c for c in covariates if reduced.schema[c].is_float()]
+    if float_covs:
+        reduced = reduced.filter(
+            pl.all_horizontal(~pl.col(c).is_nan() for c in float_covs)
+        )
     if verbose:
         print(f"    {reduced.height} rows after NaN removal")
     if reduced.height == 0:
@@ -371,6 +401,11 @@ def _run_callable(
 
     reduced = reduce_data(data, treat, tm, entry, id, lookback)
     reduced = reduced.drop_nulls(subset=covariates)
+    float_covs = [c for c in covariates if reduced.schema[c].is_float()]
+    if float_covs:
+        reduced = reduced.filter(
+            pl.all_horizontal(~pl.col(c).is_nan() for c in float_covs)
+        )
     if reduced.height == 0:
         return None
 
@@ -475,8 +510,8 @@ def rollmatch(
               compute pooled SD for PS caliper. ``"average"``,
               ``"weighted"``, or ``"none"``.
             - ``num_matches`` (int, default 1): Controls per treated.
-            - ``replacement`` (str, default ``"cross_cohort"``):
-              ``"unrestricted"``, ``"cross_cohort"``, or ``"global_no"``.
+            - ``replacement`` (str, default ``"global_no"``):
+              ``"global_no"``, ``"cross_cohort"``, or ``"unrestricted"``.
             - ``model_type`` (str, default ``"logistic"``): Scoring model.
               See :data:`~pyrollmatch.score.SUPPORTED_MODELS`.
             - ``block_size`` (int, default 2000): Block size for memory.
@@ -488,16 +523,22 @@ def rollmatch(
               e.g. ``{"x1": 0.5, "x2": 0.3}``.
             - ``std_caliper`` (bool, default True): Whether per-variable
               caliper widths are in SD units.
+            - ``random_state`` (int or None, default None): Seed for
+              reproducible matching when ``m_order="random"``.
 
         ``"ebal"``
             Entropy balancing (Hainmueller 2012). Returns per-cohort
-            weights in ``weighted_data``.
+            weights in ``weighted_data`` (recommended for stacked DiD
+            estimation with cohort fixed effects) and mean-collapsed
+            ``weights`` (approximate, for single-panel estimators).
 
             **Ebal kwargs:**
 
             - ``moment`` (int, default 1): Moment constraint (1=mean,
               2=mean+variance, 3=mean+variance+skewness).
             - ``max_weight`` (float or None): Maximum weight cap.
+              Capping may violate exact moment balance; a warning is
+              emitted if balance degrades significantly.
 
         callable
             User-defined function with signature

@@ -277,6 +277,7 @@ def match_within_period(
     dist_spec: DistanceSpec | None = None,
     m_order: str | None = None,
     var_caliper_mask: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
 ) -> MatchResult | None:
     """Match treated to controls within a single time period.
 
@@ -357,7 +358,7 @@ def match_within_period(
         return ctrl_sort_order[np.searchsorted(ctrl_ids_sorted, cid)]
 
     # Determine matching order
-    order = _sort_treated_indices(n_treated, treated_scores, m_order)
+    order = _sort_treated_indices(n_treated, treated_scores, m_order, rng=rng)
     treated_scores = treated_scores[order]
     treated_ids = treated_ids[order]
     if treated_covs is not None:
@@ -493,6 +494,7 @@ def match_all_periods(
     m_order: str | None = None,
     caliper: dict[str, float] | None = None,
     std_caliper: bool = True,
+    random_state: int | None = None,
 ) -> pl.DataFrame | None:
     """Run nearest-neighbor matching across all time periods.
 
@@ -538,6 +540,8 @@ def match_all_periods(
     mode = _normalize_replacement(replacement)
     if dist_spec is None:
         dist_spec = DistanceSpec()
+
+    rng = np.random.default_rng(random_state) if random_state is not None else None
 
     # Compute global PS caliper width
     if dist_spec.use_pairwise and not dist_spec.is_mahvars:
@@ -619,6 +623,7 @@ def match_all_periods(
             dist_spec=dist_spec,
             m_order=m_order,
             var_caliper_mask=var_caliper_mask,
+            rng=rng,
         )
         if result is not None:
             result.time_period = t

@@ -70,6 +70,8 @@ def _build_constraint_matrix(X: np.ndarray, moment: int) -> np.ndarray:
         moment=2: [1, X, X²]          (2k+1 columns)
         moment=3: [1, X, X², X³]      (3k+1 columns)
     """
+    if moment not in (1, 2, 3):
+        raise ValueError(f"moment must be 1, 2, or 3, got {moment}")
     n = X.shape[0]
     parts = [np.ones((n, 1)), X]
     if moment >= 2:
@@ -168,6 +170,9 @@ def entropy_balance(
         Moments to balance: 1=means, 2=means+variances, 3=+skewness.
     max_weight : float or None
         Optional upper bound on any single weight (after normalization).
+        **Note:** capping weights may violate the exact moment-matching
+        guarantee. When active, weights are clipped and renormalized,
+        so balanced moments become approximate.
     tol : float
         Convergence tolerance for the optimizer.
     max_iter : int
@@ -245,11 +250,24 @@ def entropy_balance(
 
     # Optional weight capping (iterate to handle re-normalization)
     if max_weight is not None:
+        w_uncapped = w.copy()
         for _ in range(20):  # converges in a few iterations
             if np.max(w) <= max_weight:
                 break
             w = np.minimum(w, max_weight)
             w = w * (n_t / w.sum())
+
+        # Post-cap diagnostic: check how much balance degraded
+        if np.max(w_uncapped) > max_weight:
+            actual_moments = (C.T @ w) / w.sum()
+            max_imbalance = float(np.max(np.abs(actual_moments - target)))
+            if max_imbalance > tol * 100:
+                warnings.warn(
+                    f"max_weight={max_weight} degraded exact balance: "
+                    f"max moment error = {max_imbalance:.6f}. "
+                    "Consider increasing max_weight or removing the cap.",
+                    stacklevel=2,
+                )
 
     # Build output DataFrame
     treat_ids = treated_data[id].to_numpy()
