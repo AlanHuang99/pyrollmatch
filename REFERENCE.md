@@ -1,6 +1,6 @@
 # pyrollmatch API Reference
 
-**Version 0.1.2**
+**Version 0.1.3**
 
 ## Overview
 
