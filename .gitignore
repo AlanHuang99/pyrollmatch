@@ -6,3 +6,6 @@ dist/
 build/
 .pytest_cache/
 
+# Generated extra-large benchmark fixture.
+tests/data/staggered_panel_xlarge.parquet
+tests/data/staggered_panel_xlarge_metadata.json
