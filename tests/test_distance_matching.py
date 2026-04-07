@@ -4,6 +4,9 @@ import polars as pl
 import numpy as np
 import pytest
 from pyrollmatch import reduce_data, score_data, rollmatch
+from pyrollmatch.match import (
+    DistanceSpec, _match_caliper_candidates, match_within_period,
+)
 from pyrollmatch.score import (
     ScoredResult, DISTANCE_MODELS, _pooled_within_group_cov,
     _pooled_within_group_sd,
@@ -284,3 +287,58 @@ class TestPerVariableCaliper:
             caliper={"x1": 2.0}, std_caliper=False,
         )
         assert result is not None
+
+    def test_candidate_caliper_matches_matrix_fallback(self, synth_data):
+        """Candidate caliper path should match the original matrix fallback."""
+        covariates = ["x1", "x2", "x3"]
+        reduced = reduce_data(synth_data, "treat", "time", "entry_time", "unit_id")
+        scored_result = score_data(
+            reduced, covariates, "treat", model_type="mahalanobis",
+        )
+        scored = scored_result.data
+
+        all_treat = scored["treat"].to_numpy() == 1
+        all_tm = scored["time"].to_numpy()
+        period = int(scored.filter(pl.col("treat") == 1)["time"].min())
+        t_idx = np.where(all_treat & (all_tm == period))[0]
+        c_idx = np.where(~all_treat & (all_tm == period))[0]
+
+        X = scored.select(covariates).to_numpy().astype(np.float64)
+        scores = scored["score"].to_numpy()
+        ids = scored["unit_id"].to_numpy()
+        widths = []
+        for cov in covariates:
+            vals = scored[cov].to_numpy().astype(np.float64)
+            sd_t = np.std(vals[all_treat], ddof=1)
+            sd_c = np.std(vals[~all_treat], ddof=1)
+            widths.append(0.5 * np.sqrt((sd_t**2 + sd_c**2) / 2))
+        widths = np.array(widths, dtype=np.float64)
+
+        mask = np.ones((len(t_idx), len(c_idx)), dtype=bool)
+        for j, width in enumerate(widths):
+            mask &= np.abs(X[t_idx, j, None] - X[c_idx, j]) <= width
+
+        dist_spec = DistanceSpec(
+            metric="mahalanobis",
+            covariates=covariates,
+            cov_inv=scored_result.cov_inv,
+        )
+        fallback = match_within_period(
+            scores[t_idx], scores[c_idx], ids[t_idx], ids[c_idx],
+            caliper_width=np.inf, num_matches=1, replacement="global_no",
+            treated_covs=X[t_idx], control_covs=X[c_idx],
+            dist_spec=dist_spec, var_caliper_mask=mask,
+        )
+        candidate = _match_caliper_candidates(
+            scores[t_idx], scores[c_idx], ids[t_idx], ids[c_idx],
+            num_matches=1, replacement="global_no", _used_controls=set(),
+            treated_covs=X[t_idx], control_covs=X[c_idx],
+            dist_spec=dist_spec, m_order=None,
+            caliper_treated=X[t_idx], caliper_controls=X[c_idx],
+            caliper_widths=widths, rng=None,
+        )
+
+        assert fallback is not None and candidate is not None
+        fallback_pairs = list(zip(fallback.treat_ids, fallback.control_ids))
+        candidate_pairs = list(zip(candidate.treat_ids, candidate.control_ids))
+        assert candidate_pairs == fallback_pairs

@@ -21,6 +21,7 @@ import numpy as np
 import polars as pl
 from dataclasses import dataclass
 from scipy.spatial.distance import cdist
+from sklearn.neighbors import KDTree
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +257,162 @@ def _sort_treated_indices(
             f"m_order must be 'largest', 'smallest', 'random', or 'data', "
             f"got {m_order!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Candidate-based caliper matching
+# ---------------------------------------------------------------------------
+
+def _compute_candidate_distances(
+    treated_cov: np.ndarray,
+    candidate_covs: np.ndarray,
+    dist_spec: DistanceSpec,
+) -> np.ndarray:
+    """Compute distances from one treated unit to candidate controls."""
+    metric = dist_spec.metric
+    treated_2d = treated_cov.reshape(1, -1)
+
+    if metric in ("mahalanobis", "robust_mahalanobis"):
+        return cdist(
+            treated_2d, candidate_covs, metric="mahalanobis",
+            VI=dist_spec.cov_inv,
+        )[0]
+    if metric == "scaled_euclidean":
+        diag = np.diag(dist_spec.transform)
+        return cdist(treated_2d * diag, candidate_covs * diag, metric="euclidean")[0]
+    if metric == "euclidean":
+        return cdist(treated_2d, candidate_covs, metric="euclidean")[0]
+
+    raise ValueError(f"Unknown candidate distance metric: {metric}")
+
+
+def _match_caliper_candidates(
+    treated_scores: np.ndarray,
+    control_scores: np.ndarray,
+    treated_ids: np.ndarray,
+    control_ids: np.ndarray,
+    num_matches: int,
+    replacement: str,
+    _used_controls: set | None,
+    treated_covs: np.ndarray,
+    control_covs: np.ndarray,
+    dist_spec: DistanceSpec,
+    m_order: str | None,
+    caliper_treated: np.ndarray,
+    caliper_controls: np.ndarray,
+    caliper_widths: np.ndarray,
+    rng: np.random.Generator | None,
+) -> MatchResult | None:
+    """Match pairwise distances after exact per-variable caliper candidate search.
+
+    Scaling each caliper variable by its absolute caliper width converts the
+    all-variable caliper rule into a Chebyshev radius query:
+    max(abs((x_t - x_c) / width)) <= 1.
+    """
+    mode = _normalize_replacement(replacement)
+    n_treated = len(treated_scores)
+    n_controls = len(control_scores)
+
+    if n_treated == 0 or n_controls == 0:
+        return None
+
+    # KDTree requires strictly positive finite scale factors.
+    if np.any(~np.isfinite(caliper_widths)) or np.any(caliper_widths <= 0):
+        return None
+
+    order = _sort_treated_indices(n_treated, treated_scores, m_order, rng=rng)
+    treated_scores = treated_scores[order]
+    treated_ids = treated_ids[order]
+    treated_covs = treated_covs[order]
+    caliper_treated = caliper_treated[order]
+
+    max_matches = n_treated * num_matches
+    out_treat = np.empty(max_matches, dtype=treated_ids.dtype)
+    out_ctrl = np.empty(max_matches, dtype=control_ids.dtype)
+    out_diff = np.empty(max_matches, dtype=np.float64)
+    n_matched = 0
+
+    if mode == "unrestricted":
+        available = None
+        used_controls = None
+    else:
+        available = np.ones(n_controls, dtype=bool)
+        if mode == "global_no":
+            used_controls = _used_controls if _used_controls is not None else set()
+            if used_controls:
+                used_arr = np.fromiter(
+                    used_controls, dtype=control_ids.dtype, count=len(used_controls)
+                )
+                available[np.isin(control_ids, used_arr, assume_unique=True)] = False
+        else:
+            used_controls = set()
+
+    tree = KDTree(
+        caliper_controls / caliper_widths,
+        metric="chebyshev",
+        leaf_size=64,
+    )
+    candidates_by_treated = tree.query_radius(
+        caliper_treated / caliper_widths,
+        r=1.0 + 1e-12,
+        return_distance=False,
+    )
+
+    for i, candidates in enumerate(candidates_by_treated):
+        if len(candidates) == 0:
+            continue
+        exact_mask = np.all(
+            np.abs(caliper_controls[candidates] - caliper_treated[i]) <= caliper_widths,
+            axis=1,
+        )
+        candidates = candidates[exact_mask]
+        if len(candidates) == 0:
+            continue
+        # KDTree query order is not part of the API; restore original control
+        # order so distance ties behave consistently with the matrix fallback.
+        candidates = np.sort(candidates)
+        if available is not None:
+            candidates = candidates[available[candidates]]
+            if len(candidates) == 0:
+                continue
+
+        dists = _compute_candidate_distances(
+            treated_covs[i], control_covs[candidates], dist_spec,
+        )
+        if len(dists) == 0:
+            continue
+
+        n_take = min(num_matches, len(dists))
+        if n_take < len(dists):
+            part_idx = np.argpartition(dists, n_take)[:n_take]
+            top_local = part_idx[np.argsort(dists[part_idx])]
+        else:
+            top_local = np.argsort(dists)
+
+        for local in top_local:
+            control_pos = candidates[local]
+            if available is not None and not available[control_pos]:
+                continue
+
+            out_treat[n_matched] = treated_ids[i]
+            out_ctrl[n_matched] = control_ids[control_pos]
+            out_diff[n_matched] = dists[local]
+            n_matched += 1
+
+            if available is not None:
+                available[control_pos] = False
+                if used_controls is not None:
+                    used_controls.add(control_ids[control_pos])
+
+    if n_matched == 0:
+        return None
+
+    return MatchResult(
+        treat_ids=out_treat[:n_matched],
+        control_ids=out_ctrl[:n_matched],
+        differences=out_diff[:n_matched],
+        time_period=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +739,23 @@ def match_all_periods(
             else:
                 caliper_widths_abs[var] = width
 
+    use_candidate_calipers = (
+        dist_spec.use_pairwise
+        and caliper_widths_abs is not None
+        and not dist_spec.is_mahvars
+    )
+    caliper_vars = list(caliper_widths_abs) if caliper_widths_abs is not None else []
+    caliper_width_array = (
+        np.array([caliper_widths_abs[var] for var in caliper_vars], dtype=np.float64)
+        if caliper_vars else None
+    )
+    if use_candidate_calipers and (
+        caliper_width_array is None
+        or np.any(~np.isfinite(caliper_width_array))
+        or np.any(caliper_width_array <= 0)
+    ):
+        use_candidate_calipers = False
+
     # Iterate over time periods
     treated_tm = all_tm[all_treat_mask]
     time_periods = np.unique(treated_tm)
@@ -601,30 +775,55 @@ def match_all_periods(
 
         # Per-variable caliper mask
         var_caliper_mask = None
-        if caliper_widths_abs is not None:
+        if caliper_widths_abs is not None and not use_candidate_calipers:
             mask = np.ones((len(t_idx), len(c_idx)), dtype=bool)
             for var, abs_width in caliper_widths_abs.items():
                 arr = caliper_var_arrays[var]
                 mask &= (np.abs(arr[t_idx, None] - arr[c_idx]) <= abs_width)
             var_caliper_mask = mask
 
-        result = match_within_period(
-            treated_scores=all_scores[t_idx],
-            control_scores=all_scores[c_idx],
-            treated_ids=all_ids[t_idx],
-            control_ids=all_ids[c_idx],
-            caliper_width=caliper_width,
-            num_matches=num_matches,
-            replacement=mode,
-            block_size=block_size,
-            _used_controls=global_used,
-            treated_covs=t_covs,
-            control_covs=c_covs,
-            dist_spec=dist_spec,
-            m_order=m_order,
-            var_caliper_mask=var_caliper_mask,
-            rng=rng,
-        )
+        if use_candidate_calipers:
+            caliper_treated = np.column_stack([
+                caliper_var_arrays[var][t_idx] for var in caliper_vars
+            ])
+            caliper_controls = np.column_stack([
+                caliper_var_arrays[var][c_idx] for var in caliper_vars
+            ])
+            result = _match_caliper_candidates(
+                treated_scores=all_scores[t_idx],
+                control_scores=all_scores[c_idx],
+                treated_ids=all_ids[t_idx],
+                control_ids=all_ids[c_idx],
+                num_matches=num_matches,
+                replacement=mode,
+                _used_controls=global_used,
+                treated_covs=t_covs,
+                control_covs=c_covs,
+                dist_spec=dist_spec,
+                m_order=m_order,
+                caliper_treated=caliper_treated,
+                caliper_controls=caliper_controls,
+                caliper_widths=caliper_width_array,
+                rng=rng,
+            )
+        else:
+            result = match_within_period(
+                treated_scores=all_scores[t_idx],
+                control_scores=all_scores[c_idx],
+                treated_ids=all_ids[t_idx],
+                control_ids=all_ids[c_idx],
+                caliper_width=caliper_width,
+                num_matches=num_matches,
+                replacement=mode,
+                block_size=block_size,
+                _used_controls=global_used,
+                treated_covs=t_covs,
+                control_covs=c_covs,
+                dist_spec=dist_spec,
+                m_order=m_order,
+                var_caliper_mask=var_caliper_mask,
+                rng=rng,
+            )
         if result is not None:
             result.time_period = t
             all_matches.append(result)
