@@ -260,6 +260,119 @@ def _sort_treated_indices(
 
 
 # ---------------------------------------------------------------------------
+# Fast path: scalar propensity-score matching
+# ---------------------------------------------------------------------------
+
+def _match_propensity_sorted(
+    treated_scores: np.ndarray,
+    control_scores: np.ndarray,
+    treated_ids: np.ndarray,
+    control_ids: np.ndarray,
+    caliper_width: float,
+    num_matches: int,
+    replacement: str,
+    _used_controls: set | None,
+    m_order: str | None,
+    rng: np.random.Generator | None,
+) -> MatchResult | None:
+    """Match on scalar scores using sorted controls instead of all pairs.
+
+    For one-dimensional propensity-score matching, the nearest controls to a
+    treated score must lie around its insertion point in sorted control-score
+    order. This avoids materializing a ``n_treated × n_controls`` distance
+    matrix for the common propensity-score path.
+    """
+    mode = _normalize_replacement(replacement)
+    n_treated = len(treated_scores)
+    n_controls = len(control_scores)
+
+    if n_treated == 0 or n_controls == 0:
+        return None
+
+    max_matches = n_treated * num_matches
+    out_treat = np.empty(max_matches, dtype=treated_ids.dtype)
+    out_ctrl = np.empty(max_matches, dtype=control_ids.dtype)
+    out_diff = np.empty(max_matches, dtype=np.float64)
+    n_matched = 0
+
+    order = _sort_treated_indices(n_treated, treated_scores, m_order, rng=rng)
+    treated_scores = treated_scores[order]
+    treated_ids = treated_ids[order]
+
+    control_sort_order = np.argsort(control_scores, kind="mergesort")
+    sorted_scores = control_scores[control_sort_order]
+
+    if mode == "unrestricted":
+        available = None
+        used_controls = None
+    else:
+        available = np.ones(n_controls, dtype=bool)
+        if mode == "global_no":
+            used_controls = _used_controls if _used_controls is not None else set()
+            if used_controls:
+                used_arr = np.fromiter(
+                    used_controls, dtype=control_ids.dtype, count=len(used_controls)
+                )
+                available[np.isin(control_ids, used_arr, assume_unique=True)] = False
+        else:
+            used_controls = set()
+
+    caliper_is_finite = np.isfinite(caliper_width)
+
+    for i in range(n_treated):
+        score = treated_scores[i]
+        right = int(np.searchsorted(sorted_scores, score, side="left"))
+        left = right - 1
+        n_take = 0
+
+        while n_take < num_matches and (left >= 0 or right < n_controls):
+            if available is not None:
+                while left >= 0 and not available[control_sort_order[left]]:
+                    left -= 1
+                while right < n_controls and not available[control_sort_order[right]]:
+                    right += 1
+
+            left_dist = abs(score - sorted_scores[left]) if left >= 0 else np.inf
+            right_dist = abs(sorted_scores[right] - score) if right < n_controls else np.inf
+
+            if left_dist <= right_dist:
+                dist = left_dist
+                sorted_pos = left
+                left -= 1
+            else:
+                dist = right_dist
+                sorted_pos = right
+                right += 1
+
+            if not np.isfinite(dist):
+                break
+            if caliper_is_finite and dist > caliper_width:
+                break
+
+            control_pos = control_sort_order[sorted_pos]
+            out_treat[n_matched] = treated_ids[i]
+            out_ctrl[n_matched] = control_ids[control_pos]
+            out_diff[n_matched] = dist
+            n_matched += 1
+            n_take += 1
+
+            if available is not None:
+                available[control_pos] = False
+                if used_controls is not None:
+                    used_controls.add(control_ids[control_pos])
+
+    if n_matched == 0:
+        return None
+
+    return MatchResult(
+        treat_ids=out_treat[:n_matched],
+        control_ids=out_ctrl[:n_matched],
+        differences=out_diff[:n_matched],
+        time_period=0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Candidate-based caliper matching
 # ---------------------------------------------------------------------------
 
@@ -482,6 +595,20 @@ def match_within_period(
 
     if n_treated == 0 or n_controls == 0:
         return None
+
+    if dist_spec.metric is None and var_caliper_mask is None:
+        return _match_propensity_sorted(
+            treated_scores=treated_scores,
+            control_scores=control_scores,
+            treated_ids=treated_ids,
+            control_ids=control_ids,
+            caliper_width=caliper_width,
+            num_matches=num_matches,
+            replacement=mode,
+            _used_controls=_used_controls,
+            m_order=m_order,
+            rng=rng,
+        )
 
     use_pairwise = dist_spec.use_pairwise and treated_covs is not None
 
