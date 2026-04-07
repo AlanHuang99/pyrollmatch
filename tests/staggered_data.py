@@ -11,6 +11,8 @@ import polars as pl
 DATA_DIR = Path(__file__).resolve().parent / "data"
 STAGGERED_PANEL_LARGE_PATH = DATA_DIR / "staggered_panel_large.parquet"
 STAGGERED_PANEL_LARGE_METADATA_PATH = DATA_DIR / "staggered_panel_large_metadata.json"
+STAGGERED_PANEL_XLARGE_PATH = DATA_DIR / "staggered_panel_xlarge.parquet"
+STAGGERED_PANEL_XLARGE_METADATA_PATH = DATA_DIR / "staggered_panel_xlarge_metadata.json"
 STAGGERED_PANEL_LARGE_COVARIATES = [
     "risk_score",
     "size_index",
@@ -20,6 +22,9 @@ STAGGERED_PANEL_LARGE_COVARIATES = [
     "cost_index",
     "support_need",
     "activity_index",
+]
+STAGGERED_PANEL_XLARGE_COVARIATES = [
+    f"x{i:02d}" for i in range(1, 31)
 ]
 
 
@@ -31,3 +36,13 @@ def load_staggered_panel_large() -> pl.DataFrame:
 def load_staggered_panel_large_metadata() -> dict:
     """Load metadata for the large staggered parquet fixture."""
     return json.loads(STAGGERED_PANEL_LARGE_METADATA_PATH.read_text(encoding="utf-8"))
+
+
+def load_staggered_panel_xlarge() -> pl.DataFrame:
+    """Load the extra-large staggered parquet fixture."""
+    return pl.read_parquet(STAGGERED_PANEL_XLARGE_PATH)
+
+
+def load_staggered_panel_xlarge_metadata() -> dict:
+    """Load metadata for the extra-large staggered parquet fixture."""
+    return json.loads(STAGGERED_PANEL_XLARGE_METADATA_PATH.read_text(encoding="utf-8"))
