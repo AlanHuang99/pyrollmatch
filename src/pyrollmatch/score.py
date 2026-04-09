@@ -207,9 +207,12 @@ def _build_model(model_type: str, max_iter: int = 1000, random_state: int = 42):
         )
     elif model_type == "rf":
         from sklearn.ensemble import RandomForestClassifier
+        # n_jobs=1 (not -1) for bit-reproducible scores — joblib parallelism
+        # produces last-bit-different predict_proba outputs across thread
+        # counts on otherwise-identical inputs.
         return RandomForestClassifier(
             n_estimators=100, max_depth=5, random_state=random_state,
-            n_jobs=-1,
+            n_jobs=1,
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
@@ -255,6 +258,7 @@ def score_data(
     model_type: str = "logistic",
     match_on: str = "logit",
     max_iter: int = 1000,
+    random_state: int = 42,
 ) -> ScoredResult:
     """Fit a propensity/distance model and return scored data with metadata.
 
@@ -287,6 +291,11 @@ def score_data(
         probability. Ignored for distance-based models.
     max_iter : int, default 1000
         Maximum optimizer iterations (propensity models only).
+    random_state : int, default 42
+        Seed for stochastic classifiers (``gbm``, ``rf``, ``lasso``,
+        ``elasticnet``). Ignored for deterministic models and for
+        distance-based models. The historical default is ``42``;
+        override for sensitivity analyses or bootstrap workflows.
 
     Returns
     -------
@@ -378,7 +387,7 @@ def score_data(
 
     else:
         # Propensity score model
-        model = _build_model(model_type, max_iter)
+        model = _build_model(model_type, max_iter, random_state=random_state)
         model.fit(X, y)
         scores = _predict_scores(model, X, model_type, match_on)
 

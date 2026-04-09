@@ -177,9 +177,14 @@ def _run_matching(
     # Step 2: Score
     if verbose:
         print("  Step 2: score_data...")
-    scored_result = score_data(
-        reduced, covariates, treat, model_type=model_type,
-    )
+    # When the user sets random_state on rollmatch(), propagate it into the
+    # scoring step so stochastic classifiers (rf/gbm/lasso/elasticnet) honor
+    # it. When random_state is None (default), score_data uses its own
+    # historical default (42) for backward compatibility.
+    score_kwargs = {"model_type": model_type}
+    if opts["random_state"] is not None:
+        score_kwargs["random_state"] = opts["random_state"]
+    scored_result = score_data(reduced, covariates, treat, **score_kwargs)
     scored = scored_result.data
 
     # Step 3: Build DistanceSpec

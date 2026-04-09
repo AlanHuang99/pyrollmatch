@@ -261,10 +261,34 @@ balance = compute_balance(scored.data, matches, "treat", "unit_id", "time", cova
 
 ---
 
+## Reproducibility
+
+`rollmatch` produces bit-identical matches when called repeatedly with the same input data and the same configuration, on the same machine.
+
+- **All distance-based models** (`mahalanobis`, `scaled_euclidean`, `robust_mahalanobis`, `euclidean`) are deterministic by construction.
+- **All propensity score models** (`logistic`, `probit`, `lasso`, `ridge`, `elasticnet`, `gbm`, `rf`) use a fixed internal seed (`42`), and `rf` runs with `n_jobs=1` to avoid joblib's last-bit non-determinism across thread counts.
+- **BLAS thread count** (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, etc.) does not affect matching results at any observable level. Pair IDs and distance values are bit-identical across thread counts on the same machine.
+
+To override the internal seed for sensitivity analyses, pass `random_state`:
+
+```python
+# Bootstrap sensitivity analysis over 100 different RF seeds
+sigs = []
+for s in range(100):
+    r = rollmatch(data, ..., model_type="rf", random_state=s)
+    sigs.append(r.balance["matched_smd"].abs().max())
+```
+
+`random_state` is also threaded through to `m_order="random"` for reproducible random matching order.
+
+**Across different machines**, pair IDs are robust but last-bit floating-point drift in BLAS routines (different OpenBLAS/MKL builds, different SIMD instruction widths) can in principle produce different `difference` values. In practice, this only affects matching decisions when two controls are tied to within ~1e-12 Mahalanobis distance of a treated unit — essentially impossible unless your covariates contain exact duplicates. The regression tests in `tests/test_reproducibility.py` guard same-machine reproducibility.
+
+---
+
 ## Testing
 
 ```bash
-uv run pytest tests/           # 151 tests
+uv run pytest tests/           # 239 tests
 uv run pytest tests/ -k stress # stress/scale tests
 ```
 
