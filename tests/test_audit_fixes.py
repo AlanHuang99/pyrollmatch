@@ -19,21 +19,15 @@ import numpy as np
 import polars as pl
 import pytest
 
-from pyrollmatch.core import rollmatch, _run_matching, _MATCHING_DEFAULTS
+from pyrollmatch.core import rollmatch, _MATCHING_DEFAULTS
 from pyrollmatch.score import score_data, _build_model
 from pyrollmatch.weight import (
     entropy_balance,
     _build_constraint_matrix,
-    _build_target,
 )
 from pyrollmatch.match import (
-    match_all_periods,
-    match_within_period,
     _sort_treated_indices,
-    DistanceSpec,
 )
-from pyrollmatch.balance import compute_balance
-from pyrollmatch.reduce import reduce_data
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +379,6 @@ class TestRandomStateReproducibility:
     def test_sort_treated_indices_seeded(self):
         """Direct test of _sort_treated_indices with rng."""
         scores = np.array([0.1, 0.5, 0.9, 0.3, 0.7])
-        rng = np.random.default_rng(42)
         order1 = _sort_treated_indices(5, scores, "random", rng=np.random.default_rng(42))
         order2 = _sort_treated_indices(5, scores, "random", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(order1, order2)
@@ -463,7 +456,7 @@ class TestMaxWeightDiagnostic:
         treated, control = self._make_ebal_data()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result = entropy_balance(
+            entropy_balance(
                 treated, control, ["x1", "x2"], "id",
                 moment=1, max_weight=0.01,
             )
@@ -493,7 +486,7 @@ class TestMaxWeightDiagnostic:
         treated, control = self._make_ebal_data()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result = entropy_balance(
+            entropy_balance(
                 treated, control, ["x1", "x2"], "id",
                 moment=1, max_weight=100.0,
             )

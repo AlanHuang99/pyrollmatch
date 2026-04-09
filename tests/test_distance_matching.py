@@ -9,7 +9,6 @@ from pyrollmatch.match import (
 )
 from pyrollmatch.score import (
     ScoredResult, DISTANCE_MODELS, _pooled_within_group_cov,
-    _pooled_within_group_sd,
 )
 
 
