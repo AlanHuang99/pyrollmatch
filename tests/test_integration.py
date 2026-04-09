@@ -9,8 +9,8 @@ import polars as pl
 import numpy as np
 import pytest
 from pyrollmatch import (
-    rollmatch, reduce_data, score_data, RollmatchResult,
-    SUPPORTED_MODELS, DISTANCE_MODELS, PROPENSITY_MODELS,
+    rollmatch, RollmatchResult,
+    SUPPORTED_MODELS, DISTANCE_MODELS,
 )
 
 

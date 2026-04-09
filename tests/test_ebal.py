@@ -122,7 +122,7 @@ class TestEntropyBalance:
         })
         # This should either warn about low n_eff or fail to converge
         import warnings
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings():
             warnings.simplefilter("always")
             result = entropy_balance(treated, controls, ["x1"], "unit_id")
         # At least one warning should fire (low n_eff or convergence)
@@ -171,7 +171,7 @@ class TestRollmatchEbal:
 
     def test_ebal_achieves_per_period_balance(self, data):
         """Ebal achieves near-zero per-period SMD (balance by construction)."""
-        from pyrollmatch import balance_by_period_weighted, reduce_data
+        from pyrollmatch import balance_by_period_weighted
 
         result = rollmatch(
             data, "treat", "time", "entry_time", "unit_id",

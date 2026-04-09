@@ -4,11 +4,9 @@ import polars as pl
 import numpy as np
 import pytest
 from pyrollmatch import (
-    rollmatch, reduce_data, score_data,
-    compute_balance_weighted, balance_by_period_weighted,
+    rollmatch, reduce_data, compute_balance_weighted, balance_by_period_weighted,
     balance_test_weighted, equivalence_test_weighted,
 )
-from pyrollmatch.balance import _weighted_mean, _weighted_std
 from tests.test_smoke import make_synthetic_data
 
 

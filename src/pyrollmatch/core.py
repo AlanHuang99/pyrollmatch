@@ -12,7 +12,6 @@ supports three method families:
 - **callable**: User-defined per-period weighting functions.
 """
 
-import warnings
 from typing import Callable
 
 import polars as pl
@@ -20,7 +19,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from .reduce import reduce_data
-from .score import score_data, DISTANCE_MODELS, PROPENSITY_MODELS
+from .score import score_data, DISTANCE_MODELS
 from .match import match_all_periods, DistanceSpec
 from .weight import _compute_weights, entropy_balance
 from .balance import compute_balance, compute_balance_weighted, smd_table
@@ -113,6 +112,65 @@ def _validate_kwargs(method: str, kwargs: dict, valid: set, defaults: dict) -> d
     return {**defaults, **kwargs}
 
 
+def _validate_treat_column(data: pl.DataFrame, treat: str) -> None:
+    """Ensure the treat column is present, numeric, and contains only {0, 1}.
+
+    Raises a clear ValueError rather than letting reduce_data / polars surface
+    a low-level ComputeError or silently return an empty reduced dataset.
+    """
+    if treat not in data.columns:
+        raise ValueError(f"treat column '{treat}' not found in data")
+
+    dtype = data.schema[treat]
+    if not (dtype.is_integer() or dtype.is_float()):
+        raise ValueError(
+            f"treat column '{treat}' must be numeric (0/1), got dtype {dtype}. "
+            "Recode treated=1 and control=0 before calling rollmatch."
+        )
+
+    uniq = data[treat].drop_nulls().unique().to_list()
+    bad = [v for v in uniq if v not in (0, 1, 0.0, 1.0)]
+    if bad:
+        raise ValueError(
+            f"treat column '{treat}' must contain only 0 and 1, "
+            f"found {sorted(uniq)}. Recode treated=1 and control=0."
+        )
+
+
+def _validate_matching_params(data: pl.DataFrame, opts: dict) -> None:
+    """Validate matching-method kwargs up front so users see clear errors
+    instead of low-level numpy/polars exceptions or silent None returns."""
+    if not isinstance(opts["num_matches"], int) or opts["num_matches"] < 1:
+        raise ValueError(
+            f"num_matches must be a positive integer, got {opts['num_matches']!r}"
+        )
+    if not isinstance(opts["block_size"], int) or opts["block_size"] < 1:
+        raise ValueError(
+            f"block_size must be a positive integer, got {opts['block_size']!r}"
+        )
+    if opts["ps_caliper"] is not None and opts["ps_caliper"] < 0:
+        raise ValueError(
+            f"ps_caliper must be >= 0 (0 = no caliper), got {opts['ps_caliper']!r}"
+        )
+    caliper = opts["caliper"]
+    if caliper is not None:
+        if not isinstance(caliper, dict):
+            raise ValueError(
+                f"caliper must be a dict mapping column name to width, "
+                f"got {type(caliper).__name__}"
+            )
+        for var, width in caliper.items():
+            if var not in data.columns:
+                raise ValueError(
+                    f"caliper column '{var}' not found in data"
+                )
+            if not isinstance(width, (int, float)) or width < 0:
+                raise ValueError(
+                    f"caliper['{var}'] must be a non-negative number, "
+                    f"got {width!r}"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Matching pipeline
 # ---------------------------------------------------------------------------
@@ -127,6 +185,8 @@ def _run_matching(
 ) -> RollmatchResult | None:
     """Run matching pipeline: reduce → score → match → weights → balance."""
     opts = _validate_kwargs("matching", kwargs, _MATCHING_KWARGS, _MATCHING_DEFAULTS)
+    _validate_treat_column(data, treat)
+    _validate_matching_params(data, opts)
 
     mahvars = opts["mahvars"]
     model_type = opts["model_type"]
@@ -290,6 +350,7 @@ def _run_ebal(
     Stacked design: each cohort weights the full control pool independently.
     """
     opts = _validate_kwargs("ebal", kwargs, _EBAL_KWARGS, _EBAL_DEFAULTS)
+    _validate_treat_column(data, treat)
 
     if verbose:
         n_treat = data.filter(pl.col(treat) == 1)[id].n_unique()
@@ -399,6 +460,7 @@ def _run_callable(
     **kwargs,
 ) -> RollmatchResult | None:
     """Run user-defined per-period weighting function (stacked design)."""
+    _validate_treat_column(data, treat)
     if verbose:
         n_treat = data.filter(pl.col(treat) == 1)[id].n_unique()
         n_ctrl = data.filter(pl.col(treat) == 0)[id].n_unique()

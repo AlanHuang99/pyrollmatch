@@ -101,7 +101,7 @@ def balance_test(
     n_total = result.height
 
     print(f"\n{'='*70}")
-    print(f"  Post-Matching Balance Diagnostics")
+    print("  Post-Matching Balance Diagnostics")
     print(f"{'='*70}")
     print(f"  SMD < {threshold}: {n_pass_smd}/{n_total} pass")
     print(f"  Variance ratio in (0.5, 2.0): {n_pass_var}/{n_total} pass")
@@ -323,7 +323,7 @@ def balance_test_weighted(
     n_total = result.height
 
     print(f"\n{'='*70}")
-    print(f"  Weighted Balance Diagnostics")
+    print("  Weighted Balance Diagnostics")
     print(f"{'='*70}")
     print(f"  SMD < {threshold}: {n_pass_smd}/{n_total} pass")
     print(f"  Variance ratio in (0.5, 2.0): {n_pass_var}/{n_total} pass")

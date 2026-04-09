@@ -4,7 +4,6 @@ import polars as pl
 import numpy as np
 import pytest
 from pyrollmatch import reduce_data, score_data, rollmatch
-from pyrollmatch.balance import compute_balance
 from pyrollmatch.diagnostics import balance_test, equivalence_test
 from tests.real_world import REAL_WORLD_COVARIATES, make_lalonde_panel
 

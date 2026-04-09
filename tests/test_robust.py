@@ -1,8 +1,5 @@
 """Robustness tests — edge cases, determinism, parameter sensitivity."""
 
-import polars as pl
-import numpy as np
-import pytest
 from pyrollmatch import rollmatch
 from tests.real_world import REAL_WORLD_COVARIATES, make_lalonde_panel
 from tests.test_smoke import make_synthetic_data

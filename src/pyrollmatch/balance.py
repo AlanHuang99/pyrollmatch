@@ -483,8 +483,17 @@ def smd_table(balance: pl.DataFrame, threshold: float = 0.1) -> None:
     threshold : float
         |SMD| threshold for pass/fail (default 0.1).
     """
+    if balance.height == 0:
+        print(f"\n{'='*70}")
+        print("  Standardized Mean Differences")
+        print("  (no covariates to report — empty balance table)")
+        print(f"{'='*70}\n")
+        return
+
     max_smd = balance["matched_smd"].abs().max()
-    all_pass = balance["matched_smd"].abs().max() < threshold
+    if max_smd is None:
+        max_smd = float("nan")
+    all_pass = max_smd < threshold if not np.isnan(max_smd) else False
 
     print(f"\n{'='*70}")
     print(f"  Standardized Mean Differences (threshold: |SMD| < {threshold})")

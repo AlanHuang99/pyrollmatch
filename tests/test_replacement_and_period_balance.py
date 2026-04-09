@@ -1,7 +1,6 @@
 """Tests for replacement modes (#3) and per-period balance (#4)."""
 
 import polars as pl
-import numpy as np
 import pytest
 from pyrollmatch import rollmatch, balance_by_period, reduce_data, score_data
 from tests.test_smoke import make_synthetic_data
