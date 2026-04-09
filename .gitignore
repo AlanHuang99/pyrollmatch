@@ -5,6 +5,13 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+/ref
+
+# Local audit / profiling scripts and evaluation data.
+tests/audit_*.py
+tests/eval_*.py
+tests/data/eval_panel.parquet
+tests/data/eval_panel_covariates.csv
 
 # Generated extra-large benchmark fixture.
 tests/data/staggered_panel_xlarge.parquet
